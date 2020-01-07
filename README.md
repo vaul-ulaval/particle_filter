@@ -4,7 +4,7 @@ This code implements the MCL algorithm for the RACECAR.
 
 [![YouTube Demo](./media/thumb.jpg)](https://www.youtube.com/watch?v=-c_0hSjgLYw)
 
-For high efficiency in Python, it uses Numpy arrays and [RangeLibc](https://github.com/kctess5/range_libc) for fast 2D ray casting.
+For high efficiency in Python, it uses Numpy arrays and [RangeLibc](https://github.com/f1tenth/range_libc) for fast 2D ray casting.
 
 # Installation
 
@@ -16,7 +16,7 @@ sudo apt-get update
 rosdep install -r --from-paths src --ignore-src --rosdistro kinetic -y
 ```
 
-For [RangeLibc](https://github.com/kctess5/range_libc):
+For [RangeLibc](https://github.com/f1tenth/range_libc):
 
 ```
 sudo pip install cython
