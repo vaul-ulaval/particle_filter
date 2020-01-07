@@ -180,6 +180,8 @@ class ParticleFiler():
             odom.pose.pose.position.x = pose[0]
             odom.pose.pose.position.y = pose[1]
             odom.pose.pose.orientation = Utils.angle_to_quaternion(pose[2])
+            cov_mat = np.cov(self.particles, rowvar=False, ddof=0, aweights=self.weights).flatten()
+            odom.pose.covariance[:cov_mat.shape[0]] = cov_mat
             self.odom_pub.publish(odom)
         
         return # below this line is disabled
