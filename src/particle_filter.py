@@ -104,6 +104,9 @@ class ParticleFiler():
         self.precompute_sensor_model()
         self.initialize_global()
 
+        # keep track of speed from input odom
+        self.current_speed = 0.0
+
         # these topics are for visualization
         self.pose_pub      = rospy.Publisher("/pf/viz/inferred_pose", PoseStamped, queue_size = 1)
         self.particle_pub  = rospy.Publisher("/pf/viz/particles", PoseArray, queue_size = 1)
@@ -182,6 +185,7 @@ class ParticleFiler():
             odom.pose.pose.orientation = Utils.angle_to_quaternion(pose[2])
             cov_mat = np.cov(self.particles, rowvar=False, ddof=0, aweights=self.weights).flatten()
             odom.pose.covariance[:cov_mat.shape[0]] = cov_mat
+            odom.twist.twist.linear.x = self.current_speed
             self.odom_pub.publish(odom)
         
         return # below this line is disabled
@@ -289,6 +293,7 @@ class ParticleFiler():
 
         orientation = Utils.quaternion_to_angle(msg.pose.pose.orientation)
         pose = np.array([position[0], position[1], orientation])
+        self.current_speed = msg.twist.twist.linear.x
 
         if isinstance(self.last_pose, np.ndarray):
             # changes in x,y,theta in local coordinate system of the car
