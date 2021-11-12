@@ -43,7 +43,7 @@ from sensor_msgs.msg import LaserScan
 from visualization_msgs.msg import Marker
 from geometry_msgs.msg import Point, Pose, PoseStamped, PoseArray, Quaternion, PolygonStamped,Polygon, Point32, PoseWithCovarianceStamped, PointStamped
 from nav_msgs.msg import Odometry
-from nav_msgs.srv import GetMap
+from nav2_msgs.srv import GetCostmap
 
 '''
 These flags indicate several variants of the sensor model. Only one of them is used at a time.
@@ -189,7 +189,10 @@ class ParticleFiler(Node):
             self.clicked_pose,
             1)
 
-        print('Finished initializing, waiting on messages...')
+        # map service client
+        self.map_client = self.create_client(GetCostmap, '/get_costmap')
+
+        self.info('Finished initializing, waiting on messages...')
 
     def get_omap(self):
         '''
@@ -200,13 +203,14 @@ class ParticleFiler(Node):
         #       see f1tenth_gym_ros on how to launch the new map_server
         #       need to check how to call new services and datatypes
 
-        # this way you could give it a different map server as a parameter
-        map_service_name = rospy.get_param('~static_map', 'static_map')
-        print('getting map from service: ', map_service_name)
-        rospy.wait_for_service(map_service_name)
-        map_msg = rospy.ServiceProxy(map_service_name, GetMap)().map
-
-        self.map_info = map_msg.info
+        while not self.map_client.wait_for_service(timeout_sec=1.0):
+            self.info('Get map service not available, waiting...')
+        req = GetCostmap.Request()
+        future = self.map_client.call_async(req)
+        rclpy.spin_until_future_complete(self, future)
+        map_msg = future.result().map
+        self.map_info = map_msg.metadata
+        
         oMap = range_libc.PyOMap(map_msg)
         self.MAX_RANGE_PX = int(self.MAX_RANGE_METERS / self.map_info.resolution)
 
