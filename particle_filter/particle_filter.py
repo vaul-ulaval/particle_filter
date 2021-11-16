@@ -35,13 +35,13 @@ import utils as Utils
 # import tf.transformations
 # import tf
 from tf2_ros import TransformBroadcaster
-# TODO: use either transform3d or tf_transformations to replace tf.transformations in ros1
+import transforms3d
 
 # messages
 from std_msgs.msg import String, Header, Float32MultiArray
 from sensor_msgs.msg import LaserScan
 from visualization_msgs.msg import Marker
-from geometry_msgs.msg import Point, Pose, PoseStamped, PoseArray, Quaternion, PolygonStamped,Polygon, Point32, PoseWithCovarianceStamped, PointStamped
+from geometry_msgs.msg import Point, Pose, PoseStamped, PoseArray, Quaternion, PolygonStamped, Polygon, Point32, PoseWithCovarianceStamped, PointStamped
 from nav_msgs.msg import Odometry
 from nav2_msgs.srv import GetCostmap
 
@@ -210,7 +210,7 @@ class ParticleFiler(Node):
         rclpy.spin_until_future_complete(self, future)
         map_msg = future.result().map
         self.map_info = map_msg.metadata
-        
+
         oMap = range_libc.PyOMap(map_msg)
         self.MAX_RANGE_PX = int(self.MAX_RANGE_METERS / self.map_info.resolution)
 
