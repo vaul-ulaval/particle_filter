@@ -35,13 +35,13 @@ import utils as Utils
 # import tf.transformations
 # import tf
 from tf2_ros import TransformBroadcaster
-import transforms3d
+import tf_transformations
 
 # messages
 from std_msgs.msg import String, Header, Float32MultiArray
 from sensor_msgs.msg import LaserScan
 from visualization_msgs.msg import Marker
-from geometry_msgs.msg import Point, Pose, PoseStamped, PoseArray, Quaternion, PolygonStamped, Polygon, Point32, PoseWithCovarianceStamped, PointStamped
+from geometry_msgs.msg import Point, Pose, PoseStamped, PoseArray, Quaternion, PolygonStamped, Polygon, Point32, PoseWithCovarianceStamped, PointStamped, TransformStamped
 from nav_msgs.msg import Odometry
 from nav2_msgs.srv import GetCostmap
 
@@ -232,26 +232,39 @@ class ParticleFiler(Node):
         print 'Done loading map'
 
          # 0: permissible, -1: unmapped, 100: blocked
-        array_255 = np.array(map_msg.data).reshape((map_msg.info.height, map_msg.info.width))
+        array_255 = np.array(map_msg.data).reshape((map_msg.info.size_y, map_msg.info.size_x))
 
         # 0: not permissible, 1: permissible
         self.permissible_region = np.zeros_like(array_255, dtype=bool)
         self.permissible_region[array_255==0] = 1
         self.map_initialized = True
 
-    def publish_tf(self,pose, stamp=None):
+    def publish_tf(self, pose, stamp=None):
         ''' Publish a tf for the car. This tells ROS where the car is with respect to the map. '''
         if stamp == None:
-            stamp = rospy.Time.now()
+            stamp = self.get_clock().now().to_msg()
 
-        # this may cause issues with the TF tree. If so, see the below code.
-        self.pub_tf.sendTransform((pose[0],pose[1],0),tf.transformations.quaternion_from_euler(0, 0, pose[2]), 
-               stamp , '/laser', '/map')
+        t = TransformStamped()
+        # header
+        t.header.stamp = stamp
+        t.header.frame_id = '/map'
+        t.child_frame_id = '/laser'
+        # translation
+        t.transform.translation.x = pose[0]
+        t.transform.translation.y = pose[1]
+        t.transform.translation.z = 0.0
+        q = tf_transformations.quaternion_from_euler(0., 0., pose[2])
+        # rotation
+        t.transform.rotation.x = q[0]
+        t.transform.rotation.y = q[1]
+        t.transform.rotation.z = q[2]
+        t.transform.rotation.w = q[3]
 
         # also publish odometry to facilitate getting the localization pose
         if self.PUBLISH_ODOM:
             odom = Odometry()
-            odom.header = Utils.make_header('/map', stamp)
+            odom.header.stamp = self.get_clock().now().to_msg()
+            odom.header.frame_id = '/map'
             odom.pose.pose.position.x = pose[0]
             odom.pose.pose.position.y = pose[1]
             odom.pose.pose.orientation = Utils.angle_to_quaternion(pose[2])
@@ -260,28 +273,7 @@ class ParticleFiler(Node):
             odom.twist.twist.linear.x = self.current_speed
             self.odom_pub.publish(odom)
         
-        return # below this line is disabled
-
-        '''
-        Our particle filter provides estimates for the 'laser' frame
-        since that is where our laser range estimates are measure from. Thus,
-        We want to publish a 'map' -> 'laser' transform.
-
-        However, the car's position is measured with respect to the 'base_link'
-        frame (it is the root of the TF tree). Thus, we should actually define
-        a 'map' -> 'base_link' transform as to not break the TF tree.
-        '''
-
-        # Get map -> laser transform.
-        map_laser_pos = np.array( (pose[0],pose[1],0) )
-        map_laser_rotation = np.array( tf.transformations.quaternion_from_euler(0, 0, pose[2]) )
-        # Apply laser -> base_link transform to map -> laser transform
-        # This gives a map -> base_link transform
-        laser_base_link_offset = (0.265, 0, 0)
-        map_laser_pos -= np.dot(tf.transformations.quaternion_matrix(tf.transformations.unit_vector(map_laser_rotation))[:3,:3], laser_base_link_offset).T
-
-        # Publish transform
-        self.pub_tf.sendTransform(map_laser_pos, map_laser_rotation, stamp , '/base_link', '/map')
+        return
 
     def visualize(self):
         '''
@@ -290,16 +282,17 @@ class ParticleFiler(Node):
         if not self.DO_VIZ:
             return
 
-        if self.pose_pub.get_num_connections() > 0 and isinstance(self.inferred_pose, np.ndarray):
+        if self.pose_pub.get_subscription_count() > 0 and isinstance(self.inferred_pose, np.ndarray):
             # Publish the inferred pose for visualization
             ps = PoseStamped()
-            ps.header = Utils.make_header('map')
+            ps.header.stamp = self.get_clock().now().to_msg()
+            ps.header.frame_id = '/map'
             ps.pose.position.x = self.inferred_pose[0]
             ps.pose.position.y = self.inferred_pose[1]
             ps.pose.orientation = Utils.angle_to_quaternion(self.inferred_pose[2])
             self.pose_pub.publish(ps)
 
-        if self.particle_pub.get_num_connections() > 0:
+        if self.particle_pub.get_subscription_count() > 0:
             # publish a downsampled version of the particle distribution to avoid a lot of latency
             if self.MAX_PARTICLES > self.MAX_VIZ_PARTICLES:
                 # randomly downsample particles
@@ -309,7 +302,7 @@ class ParticleFiler(Node):
             else:
                 self.publish_particles(self.particles)
 
-        if self.pub_fake_scan.get_num_connections() > 0 and isinstance(self.ranges, np.ndarray):
+        if self.pub_fake_scan.get_subscription_count() > 0 and isinstance(self.ranges, np.ndarray):
             # generate the scan from the point of view of the inferred position for visualization
             self.viz_queries[:,0] = self.inferred_pose[0]
             self.viz_queries[:,1] = self.inferred_pose[1]
@@ -320,7 +313,8 @@ class ParticleFiler(Node):
     def publish_particles(self, particles):
         # publish the given particles as a PoseArray object
         pa = PoseArray()
-        pa.header = Utils.make_header('map')
+        pa.header.stamp = self.get_clock().now().to_msg()
+        pa.header.frame_id = '/map'
         pa.poses = Utils.particles_to_poses(particles)
         self.particle_pub.publish(pa)
 

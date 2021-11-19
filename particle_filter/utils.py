@@ -1,14 +1,10 @@
-#!/usr/bin/env python
-
-import rospy
 import numpy as np
 
 from std_msgs.msg import Header
 from visualization_msgs.msg import Marker
-from geometry_msgs.msg import Point, Pose, PoseStamped, PoseArray, Quaternion, PolygonStamped,Polygon, Point32, PoseWithCovarianceStamped, PointStamped
-import tf.transformations
-import tf
-import matplotlib.pyplot as plt
+from geometry_msgs.msg import Point, Pose, PoseStamped, PoseArray, Quaternion, PolygonStamped, Polygon, Point32, PoseWithCovarianceStamped, PointStamped
+import tf_transformations
+import tf2_ros
 import time
 
 class CircularArray(object):
@@ -55,14 +51,14 @@ class Timer:
 
 def angle_to_quaternion(angle):
     """Convert an angle in radians into a quaternion _message_."""
-    return Quaternion(*tf.transformations.quaternion_from_euler(0, 0, angle))
+    return Quaternion(*tf_transformations.quaternion_from_euler(0, 0, angle))
 
 def quaternion_to_angle(q):
     """Convert a quaternion _message_ into an angle in radians.
     The angle represents the yaw.
     This is not just the z component of the quaternion."""
     x, y, z, w = q.x, q.y, q.z, q.w
-    roll, pitch, yaw = tf.transformations.euler_from_quaternion((x, y, z, w))
+    roll, pitch, yaw = tf_transformations.euler_from_quaternion((x, y, z, w))
     return yaw
 
 def rotation_matrix(theta):
@@ -84,14 +80,15 @@ def particles_to_poses(particles):
     '''
     return map(particle_to_pose, particles)
 
-def make_header(frame_id, stamp=None):
-    ''' Creates a Header object for stamped ROS objects '''
-    if stamp == None:
-        stamp = rospy.Time.now()
-    header = Header()
-    header.stamp = stamp
-    header.frame_id = frame_id
-    return header
+# DEPRECATED: should make the header inside the node now
+# def make_header(frame_id, stamp=None):
+#     ''' Creates a Header object for stamped ROS objects '''
+#     if stamp == None:
+#         stamp = rospy.Time.now()
+#     header = Header()
+#     header.stamp = stamp
+#     header.frame_id = frame_id
+#     return header
 
 def map_to_world_slow(x,y,t,map_info):
     ''' Converts given (x,y,t) coordinates from the coordinate space of the map (pixels) into world coordinates (meters).
