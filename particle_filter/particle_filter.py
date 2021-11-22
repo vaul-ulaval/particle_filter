@@ -199,9 +199,6 @@ class ParticleFiler(Node):
         Fetch the occupancy grid map from the map_server instance, and initialize the correct
         RangeLibc method. Also stores a matrix which indicates the permissible region of the map
         '''
-        # TODO: navigation2 uses a completely different set of messages and services
-        #       see f1tenth_gym_ros on how to launch the new map_server
-        #       need to check how to call new services and datatypes
 
         while not self.map_client.wait_for_service(timeout_sec=1.0):
             self.info('Get map service not available, waiting...')
@@ -321,7 +318,8 @@ class ParticleFiler(Node):
     def publish_scan(self, angles, ranges):
         # publish the given angels and ranges as a laser scan message
         ls = LaserScan()
-        ls.header = Utils.make_header('laser', stamp=self.last_stamp)
+        ls.header.stamp = self.last_stamp
+        ls.header.frame_id = '/laser'
         ls.angle_min = np.min(angles)
         ls.angle_max = np.max(angles)
         ls.angle_increment = np.abs(angles[0] - angles[1])
@@ -340,7 +338,7 @@ class ParticleFiler(Node):
             self.downsampled_angles = np.copy(self.laser_angles[0::self.ANGLE_STEP]).astype(np.float32)
             self.viz_queries = np.zeros((self.downsampled_angles.shape[0],3), dtype=np.float32)
             self.viz_ranges = np.zeros(self.downsampled_angles.shape[0], dtype=np.float32)
-            print self.downsampled_angles.shape[0]
+            print(self.downsampled_angles.shape[0])
 
         # store the necessary scanner information for later processing
         self.downsampled_ranges = np.array(msg.ranges[::self.ANGLE_STEP])
@@ -441,11 +439,11 @@ class ParticleFiler(Node):
 
         t = time.time()
         # d is the computed range from RangeLibc
-        for d in xrange(table_width):
+        for d in range(table_width):
             norm = 0.0
             sum_unkown = 0.0
             # r is the observed range from the lidar unit
-            for r in xrange(table_width):
+            for r in range(table_width):
                 prob = 0.0
                 z = float(r-d)
                 # reflects from the intended object
@@ -472,38 +470,6 @@ class ParticleFiler(Node):
         # upload the sensor model to RangeLib for ultra fast resolution
         if self.RANGELIB_VAR > 0:
             self.range_method.set_sensor_model(self.sensor_model_table)
-
-        # code to generate various visualizations of the sensor model
-        if False:
-            # visualize the sensor model
-            fig = plt.figure()
-            ax = fig.gca(projection='3d')
-
-            # Make data.
-            X = np.arange(0, table_width, 1.0)
-            Y = np.arange(0, table_width, 1.0)
-            X, Y = np.meshgrid(X, Y)
-
-            # Plot the surface.
-            surf = ax.plot_surface(X, Y, self.sensor_model_table, cmap='bone', rstride=2, cstride=2,
-                                   linewidth=0, antialiased=True)
-
-            ax.text2D(0.05, 0.95, 'Precomputed Sensor Model', transform=ax.transAxes)
-            ax.set_xlabel('Ground truth distance (in px)')
-            ax.set_ylabel('Measured Distance (in px)')
-            ax.set_zlabel('P(Measured Distance | Ground Truth)')
-
-            plt.show()
-        elif False:
-            plt.imshow(self.sensor_model_table * 255, cmap='gray')
-            plt.show()
-        elif False:
-            plt.plot(self.sensor_model_table[:,140])
-            plt.plot([139,139],[0.0,0.08], label='test')
-            plt.ylim(0.0, 0.08)
-            plt.xlabel('Measured Distance (in px)')
-            plt.ylabel('P(Measured Distance | Ground Truth Distance = 140px)')
-            plt.show()
 
     def motion_model(self, proposal_dist, action):
         '''
@@ -719,26 +685,26 @@ class ParticleFiler(Node):
 
                 self.visualize()
 
-import argparse
-import sys
-parser = argparse.ArgumentParser(description='Particle filter.')
-parser.add_argument('--config', help='Path to yaml file containing config parameters. Helpful for calling node directly with Python for profiling.')
+# import argparse
+# import sys
+# parser = argparse.ArgumentParser(description='Particle filter.')
+# parser.add_argument('--config', help='Path to yaml file containing config parameters. Helpful for calling node directly with Python for profiling.')
 
-def load_params_from_yaml(fp):
-    from yaml import load
-    with open(fp, 'r') as infile:
-        yaml_data = load(infile)
-        for param in yaml_data:
-            print 'param:', param, ':', yaml_data[param]
-            rospy.set_param('~'+param, yaml_data[param])
+# def load_params_from_yaml(fp):
+#     from yaml import load
+#     with open(fp, 'r') as infile:
+#         yaml_data = load(infile)
+#         for param in yaml_data:
+#             print 'param:', param, ':', yaml_data[param]
+#             rospy.set_param('~'+param, yaml_data[param])
 
-# this function can be used to generate flame graphs easily
-def make_flamegraph(filterx=None):
-    import flamegraph, os
-    perf_log_path = os.path.join(os.path.dirname(__file__), '../tmp/perf.log')
-    flamegraph.start_profile_thread(fd=open(perf_log_path, 'w'),
-                                    filter=filterx,
-                                    interval=0.001)
+# # this function can be used to generate flame graphs easily
+# def make_flamegraph(filterx=None):
+#     import flamegraph, os
+#     perf_log_path = os.path.join(os.path.dirname(__file__), '../tmp/perf.log')
+#     flamegraph.start_profile_thread(fd=open(perf_log_path, 'w'),
+#                                     filter=filterx,
+#                                     interval=0.001)
 
 def main(args=None):
     rclpy.init(args=args)
