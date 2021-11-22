@@ -47,7 +47,7 @@ def generate_launch_description():
     pf_node = Node(
         package='particle_filter',
         executable='particle_filter',
-        name='particle_filter_node',
+        name='particle_filter',
         parameters=[LaunchConfiguration('localize_config')]
     )
     map_server_node = Node(

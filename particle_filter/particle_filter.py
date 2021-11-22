@@ -29,7 +29,7 @@ import numpy as np
 import range_libc
 import time
 from threading import Lock
-import utils as Utils
+from particle_filter import utils as Utils
 
 # TF
 # import tf.transformations
@@ -85,6 +85,30 @@ class ParticleFiler(Node):
         self.declare_parameter('motion_dispersion_theta')
         self.declare_parameter('scan_topic')
         self.declare_parameter('odometry_topic')
+
+        self.get_logger.info(
+        str([self.get_parameter('angle_step').value,
+        self.get_parameter('max_particles').value,
+        self.get_parameter('max_viz_particles').value,
+        self.get_parameter('squash_factor').value,
+        self.get_parameter('max_range').value,
+        self.get_parameter('theta_discretization').value,
+        self.get_parameter('range_method').value,
+        self.get_parameter('rangelib_variant').value,
+        self.get_parameter('fine_timing').value,
+        self.get_parameter('publish_odom').value,
+        self.get_parameter('viz').value,
+        self.get_parameter('z_short').value,
+        self.get_parameter('z_max').value,
+        self.get_parameter('z_rand').value,
+        self.get_parameter('z_hit').value,
+        self.get_parameter('sigma_hit').value,
+        self.get_parameter('motion_dispersion_x').value,
+        self.get_parameter('motion_dispersion_y').value,
+        self.get_parameter('motion_dispersion_theta').value,
+        self.get_parameter('scan_topic').value,
+        self.get_parameter('odometry_topic').value])
+            )
 
         # parameters
         self.ANGLE_STEP           = self.get_parameter('angle_step').value
