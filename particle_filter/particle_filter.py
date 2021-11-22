@@ -148,7 +148,7 @@ class ParticleFiler(Node):
         self.smoothing = Utils.CircularArray(10)
         self.timer = Utils.Timer(10)
         # map service client
-        self.map_client = self.create_client(GetMap, '/get_map')
+        self.map_client = self.create_client(GetMap, '/map_server/map')
         self.get_omap()
         self.precompute_sensor_model()
         self.initialize_global()
@@ -211,7 +211,7 @@ class ParticleFiler(Node):
         self.MAX_RANGE_PX = int(self.MAX_RANGE_METERS / self.map_info.resolution)
 
         # initialize range method
-        self.get_logger().info('Initializing range method:', self.WHICH_RM)
+        self.get_logger().info('Initializing range method: ' + self.WHICH_RM)
         if self.WHICH_RM == 'bl':
             self.range_method = range_libc.PyBresenhamsLine(oMap, self.MAX_RANGE_PX)
         elif 'cddt' in self.WHICH_RM:
@@ -337,7 +337,7 @@ class ParticleFiler(Node):
             self.downsampled_angles = np.copy(self.laser_angles[0::self.ANGLE_STEP]).astype(np.float32)
             self.viz_queries = np.zeros((self.downsampled_angles.shape[0],3), dtype=np.float32)
             self.viz_ranges = np.zeros(self.downsampled_angles.shape[0], dtype=np.float32)
-            self.get_logger().info(self.downsampled_angles.shape[0])
+            self.get_logger().info(str(self.downsampled_angles.shape[0]))
 
         # store the necessary scanner information for later processing
         self.downsampled_ranges = np.array(msg.ranges[::self.ANGLE_STEP])
@@ -389,7 +389,7 @@ class ParticleFiler(Node):
         Initialize particles in the general region of the provided pose.
         '''
         self.get_logger().info('SETTING POSE')
-        self.get_logger().info(pose)
+        self.get_logger().info(str([pose.position.x, pose.position.y]))
         self.state_lock.acquire()
         self.weights = np.ones(self.MAX_PARTICLES) / float(self.MAX_PARTICLES)
         self.particles[:,0] = pose.position.x + np.random.normal(loc=0.0,scale=0.5,size=self.MAX_PARTICLES)
@@ -559,8 +559,8 @@ class ParticleFiler(Node):
                 t_total = (t_squash - t_start) / 100.0
 
             if self.SHOW_FINE_TIMING and self.iters % 10 == 0:
-                self.get_logger().info('sensor_model: init: ', np.round((t_init-t_start)/t_total, 2), 'range:', np.round((t_range-t_init)/t_total, 2), \
-                      'eval:', np.round((t_eval-t_range)/t_total, 2), 'squash:', np.round((t_squash-t_eval)/t_total, 2))
+                self.get_logger().info(str(['sensor_model: init: ', np.round((t_init-t_start)/t_total, 2), 'range:', np.round((t_range-t_init)/t_total, 2), \
+                      'eval:', np.round((t_eval-t_range)/t_total, 2), 'squash:', np.round((t_squash-t_eval)/t_total, 2)]))
         elif self.RANGELIB_VAR == VAR_CALC_RANGE_MANY_EVAL_SENSOR:
             # this version demonstrates what this would look like with coordinate space conversion pushed to rangelib
             # this part is inefficient since it requires a lot of effort to construct this redundant array
@@ -636,8 +636,8 @@ class ParticleFiler(Node):
             t_total = (t_norm - t)/100.0
 
         if self.SHOW_FINE_TIMING and self.iters % 10 == 0:
-            self.get_logger().info('MCL: propose: ', np.round((t_propose-t)/t_total, 2), 'motion:', np.round((t_motion-t_propose)/t_total, 2), \
-                  'sensor:', np.round((t_sensor-t_motion)/t_total, 2), 'norm:', np.round((t_norm-t_sensor)/t_total, 2))
+            self.get_logger().info(str(['MCL: propose: ', np.round((t_propose-t)/t_total, 2), 'motion:', np.round((t_motion-t_propose)/t_total, 2), \
+                  'sensor:', np.round((t_sensor-t_motion)/t_total, 2), 'norm:', np.round((t_norm-t_sensor)/t_total, 2)]))
 
         # save the particles
         self.particles = proposal_distribution
@@ -680,7 +680,7 @@ class ParticleFiler(Node):
                 ips = 1.0 / (t2 - t1)
                 self.smoothing.append(ips)
                 if self.iters % 10 == 0:
-                    self.get_logger().info('iters per sec:', int(self.timer.fps()), ' possible:', int(self.smoothing.mean()))
+                    self.get_logger().info(str(['iters per sec:', int(self.timer.fps()), ' possible:', int(self.smoothing.mean())]))
 
                 self.visualize()
 
