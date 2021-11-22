@@ -4,7 +4,7 @@ from std_msgs.msg import Header
 from visualization_msgs.msg import Marker
 from geometry_msgs.msg import Point, Pose, PoseStamped, PoseArray, Quaternion, PolygonStamped, Polygon, Point32, PoseWithCovarianceStamped, PointStamped
 import tf_transformations
-import tf2_ros
+# import tf2_ros
 import time
 
 class CircularArray(object):

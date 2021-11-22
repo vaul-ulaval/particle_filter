@@ -43,7 +43,7 @@ from sensor_msgs.msg import LaserScan
 from visualization_msgs.msg import Marker
 from geometry_msgs.msg import Point, Pose, PoseStamped, PoseArray, Quaternion, PolygonStamped, Polygon, Point32, PoseWithCovarianceStamped, PointStamped, TransformStamped
 from nav_msgs.msg import Odometry
-from nav2_msgs.srv import GetCostmap
+from nav_msgs.srv import GetMap
 
 '''
 These flags indicate several variants of the sensor model. Only one of them is used at a time.
@@ -148,7 +148,7 @@ class ParticleFiler(Node):
         self.smoothing = Utils.CircularArray(10)
         self.timer = Utils.Timer(10)
         # map service client
-        self.map_client = self.create_client(GetCostmap, '/get_costmap')
+        self.map_client = self.create_client(GetMap, '/get_map')
         self.get_omap()
         self.precompute_sensor_model()
         self.initialize_global()
@@ -201,11 +201,11 @@ class ParticleFiler(Node):
 
         while not self.map_client.wait_for_service(timeout_sec=1.0):
             self.get_logger().info('Get map service not available, waiting...')
-        req = GetCostmap.Request()
+        req = GetMap.Request()
         future = self.map_client.call_async(req)
         rclpy.spin_until_future_complete(self, future)
         map_msg = future.result().map
-        self.map_info = map_msg.metadata
+        self.map_info = map_msg.info
 
         oMap = range_libc.PyOMap(map_msg)
         self.MAX_RANGE_PX = int(self.MAX_RANGE_METERS / self.map_info.resolution)
@@ -228,7 +228,7 @@ class ParticleFiler(Node):
         self.get_logger().info('Done loading map')
 
          # 0: permissible, -1: unmapped, 100: blocked
-        array_255 = np.array(map_msg.data).reshape((map_msg.info.size_y, map_msg.info.size_x))
+        array_255 = np.array(map_msg.data).reshape((map_msg.info.height, map_msg.info.width))
 
         # 0: not permissible, 1: permissible
         self.permissible_region = np.zeros_like(array_255, dtype=bool)
@@ -594,7 +594,7 @@ class ParticleFiler(Node):
             intrng = np.rint(ranges).astype(np.uint16)
 
             # compute the weight for each particle
-            for i in xrange(self.MAX_PARTICLES):
+            for i in range(self.MAX_PARTICLES):
                 weight = np.product(self.sensor_model_table[intobs,intrng[i*num_rays:(i+1)*num_rays]])
                 weight = np.power(weight, self.INV_SQUASH_FACTOR)
                 weights[i] = weight
