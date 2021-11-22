@@ -167,7 +167,7 @@ class ParticleFiler(Node):
             self.odom_pub = self.create_publisher(Odometry, '/pf/pose/odom', 1)
 
         # these topics are for coordinate space things
-        self.pub_tf = TransformBroadcaster()
+        self.pub_tf = TransformBroadcaster(self)
 
         # these topics are to receive data from the racecar
         self.laser_sub = self.create_subscription(
