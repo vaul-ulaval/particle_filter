@@ -11,7 +11,7 @@ particle_filter:
     viz: 1
     max_viz_particles: 60
     # ray marching method
-    range_method: 'rmgpu'
+    range_method: 'glt'
     theta_discretization: 112
     # range data filtering
     max_range: 10
