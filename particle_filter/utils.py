@@ -51,7 +51,13 @@ class Timer:
 
 def angle_to_quaternion(angle):
     """Convert an angle in radians into a quaternion _message_."""
-    return Quaternion(*tf_transformations.quaternion_from_euler(0, 0, angle))
+    q = tf_transformations.quaternion_from_euler(0, 0, angle)
+    q_out = Quaternion()
+    q_out.x = q[0]
+    q_out.y = q[1]
+    q_out.z = q[2]
+    q_out.w = q[3]
+    return q_out
 
 def quaternion_to_angle(q):
     """Convert a quaternion _message_ into an angle in radians.
