@@ -6,6 +6,20 @@ This code implements the MCL algorithm for the RACECAR.
 
 For high efficiency in Python, it uses Numpy arrays and [RangeLibc](https://github.com/f1tenth/range_libc) for fast 2D ray casting.
 
+# Prerequisite
+
+You need to have python2.7 with pip2 installed so check these before
+```
+python2 --version
+pip2 --version
+```
+
+If python2 or pip2 is not installed, do this :
+```
+sudo apt install python2
+sudo curl https://bootstrap.pypa.io/pip/2.7/get-pip.py --output get-pip.py && sudo python2 get-pip.py
+```
+
 # Installation
 
 To run this, you need to ensure that both the map_server ROS package, and the python wrappers for RangeLibc are installed.
@@ -13,13 +27,14 @@ To run this, you need to ensure that both the map_server ROS package, and the py
 For the map server:
 ```
 sudo apt-get update
-rosdep install -r --from-paths src --ignore-src --rosdistro kinetic -y
+rosdep install -r --from-paths src --ignore-src --rosdistro foxy -y
 ```
 
 For [RangeLibc](https://github.com/f1tenth/range_libc):
 
 ```
-sudo pip install cython
+sudo pip2 install cython
+sudo apt install python-dev # This is to fix a compilation error where Python.h is not found https://blog.ducthinh.net/gcc-no-such-file-python-h/
 git clone http://github.com/kctess5/range_libc
 cd range_libc/pywrappers
 # on VM
