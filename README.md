@@ -38,9 +38,9 @@ sudo apt install python-dev # This is to fix a compilation error where Python.h 
 git clone http://github.com/kctess5/range_libc
 cd range_libc/pywrappers
 # on VM
-./compile.sh
+sudo python2 setup.py install
 # on car - compiles GPU ray casting methods
-./compile_with_cuda.sh
+sudo WITH_CUDA=ON python2 setup.py install
 ```
 
 # Usage
