@@ -12,6 +12,7 @@ To run this, you need to ensure that both the map_server ROS package, and the py
 
 For the map server :
 ```
+# Do this at the root of your colcon workspace
 sudo apt-get update
 rosdep install -r --from-paths src --ignore-src --rosdistro foxy -y
 ```
@@ -19,6 +20,7 @@ rosdep install -r --from-paths src --ignore-src --rosdistro foxy -y
 For [RangeLibc](https://github.com/f1tenth/range_libc):
 
 ```
+# No need to clone this in your workspace, we will only use the python wrapper
 git clone https://github.com/f1tenth/range_libc
 cd range_libc/pywrappers
 # on VM
