@@ -29,6 +29,14 @@ cd range_libc/pywrappers
 ./compile_with_cuda.sh
 ```
 
+# Utilisation dans le simulateur
+Pour l'utiliser dans le simulateur, il faut commenter le lancement du map_server dans le launch file. Dans le fichier ```launch/localize_launch.py```, commenter ces deux lignes (Vers la fin du fichier) :
+```python
+    ld.add_action(nav_lifecycle_node)
+    ld.add_action(map_server_node)
+```
+
+Ensuite, dans le fichier ```config/localize.yaml```, change le 'odometry_topic' pour '/ego_racecar/odom' et 'range_method' pour 'glt'
 # Usage
 
 The majority of parameters you might want to tweak are in the launch/localize.launch file. You may have to modify the "odometry_topic" or "scan_topic" parameters to match your environment.
