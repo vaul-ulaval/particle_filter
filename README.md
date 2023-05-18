@@ -42,12 +42,12 @@ Ensuite, dans le fichier ```config/localize.yaml```, change le 'odometry_topic' 
 The majority of parameters you might want to tweak are in the launch/localize.launch file. You may have to modify the "odometry_topic" or "scan_topic" parameters to match your environment.
 
 ```
-roslaunch particle_filter localize.launch
+ros2 launch particle_filter localize_launch.py
 ```
 
 Once the particle filter is running, you can visualize the map and other particle filter visualization message in RViz. Use the "2D Pose Estimate" tool from the RViz toolbar to initialize the particle locations.
 
-See [launch/localize.launch](/particle_filter/launch/localize.launch) for docs on available parameters and arguments.
+See [launch/localize.launch](/particle_filter/launch/localize_launch.py) for docs on available parameters and arguments.
 
 The "range_method" parameter determines which RangeLibc ray casting method to use. The default is cddt because it is fast and has a low initialization time. The fastest option on the CPU is "glt" but it has a slow startup. The fastest version if you have can compile RangeLibc with CUDA enabled is "rmgpu". See this performance comparison chart:
 
