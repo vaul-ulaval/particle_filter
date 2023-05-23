@@ -269,7 +269,8 @@ class ParticleFiler(Node):
         t.transform.rotation.y = q[1]
         t.transform.rotation.z = q[2]
         t.transform.rotation.w = q[3]
-        self.pub_tf.sendTransform(t)
+        if not self.PUBLISH_MAP_TO_ODOM:
+            self.pub_tf.sendTransform(t)
         
         # Check if we need to publish map -> odom transform
         if self.PUBLISH_MAP_TO_ODOM:
