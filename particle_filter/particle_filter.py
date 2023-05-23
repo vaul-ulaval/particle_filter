@@ -38,6 +38,7 @@ import tf2_ros
 from tf2_ros import TransformBroadcaster
 from tf2_ros import TransformListener
 from tf2_ros import TransformException
+from tf2_ros.buffer import Buffer
 import tf_transformations
 
 
@@ -181,7 +182,8 @@ class ParticleFiler(Node):
         self.pub_tf = TransformBroadcaster(self)
 
         if self.PUBLISH_MAP_TO_ODOM:
-            self.map_to_odom = TransformListener(self)
+            self.tf_buffer = Buffer()
+            self.tf_listener = TransformListener(self.tf_buffer, self)
 
         # these topics are to receive data from the racecar
         self.laser_sub = self.create_subscription(
