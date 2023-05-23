@@ -34,8 +34,12 @@ from particle_filter import utils as Utils
 # TF
 # import tf.transformations
 # import tf
+import tf2_ros
 from tf2_ros import TransformBroadcaster
+from tf2_ros import TransformListener
+from tf2_ros import TransformException
 import tf_transformations
+
 
 # messages
 from std_msgs.msg import String, Header, Float32MultiArray
@@ -85,6 +89,9 @@ class ParticleFiler(Node):
         self.declare_parameter('motion_dispersion_theta')
         self.declare_parameter('scan_topic')
         self.declare_parameter('odometry_topic')
+        self.declare_parameter('publish_map_to_odom')
+        self.declare_parameter('transform_tolerance')
+
 
         # parameters
         self.ANGLE_STEP           = self.get_parameter('angle_step').value
@@ -98,6 +105,10 @@ class ParticleFiler(Node):
         self.SHOW_FINE_TIMING     = self.get_parameter('fine_timing').value
         self.PUBLISH_ODOM         = self.get_parameter('publish_odom').value
         self.DO_VIZ               = self.get_parameter('viz').value
+        self.PUBLISH_MAP_TO_ODOM  = self.get_parameter('publish_map_to_odom').value
+        self.TRANSFORM_TOLERANCE  = self.get_parameter('transform_tolerance').value
+
+        
 
         # sensor model constants
         self.Z_SHORT   = self.get_parameter('z_short').value
@@ -168,6 +179,9 @@ class ParticleFiler(Node):
 
         # these topics are for coordinate space things
         self.pub_tf = TransformBroadcaster(self)
+
+        if self.PUBLISH_MAP_TO_ODOM:
+            self.map_to_odom = TransformListener(self)
 
         # these topics are to receive data from the racecar
         self.laser_sub = self.create_subscription(
@@ -243,8 +257,8 @@ class ParticleFiler(Node):
         t = TransformStamped()
         # header
         t.header.stamp = stamp
-        t.header.frame_id = '/map'
-        t.child_frame_id = '/laser'
+        t.header.frame_id = 'map'
+        t.child_frame_id = 'laser'
         # translation
         t.transform.translation.x = pose[0]
         t.transform.translation.y = pose[1]
@@ -256,11 +270,50 @@ class ParticleFiler(Node):
         t.transform.rotation.z = q[2]
         t.transform.rotation.w = q[3]
         self.pub_tf.sendTransform(t)
-        # also publish odometry to facilitate getting the localization pose
+        
+        # Check if we need to publish map -> odom transform
+        if self.PUBLISH_MAP_TO_ODOM:
+            # Get map -> laser transform.
+            map_laser_pos = np.array((pose[0], pose[1], 0))
+            map_laser_rotation = np.array(tf_transformations.quaternion_from_euler(0, 0, pose[2]))
+            # Get laser -> odom transform.
+            try:
+                trans = self.tf_buffer.lookup_transform('laser', 'odom', rclpy.time.Time())
+                laser_odom_pos = np.array([trans.transform.translation.x, trans.transform.translation.y, trans.transform.translation.z])
+                laser_odom_quaternion = np.array([trans.transform.rotation.x, trans.transform.rotation.y, trans.transform.rotation.z, trans.transform.rotation.w])
+            except tf2_ros.TransformException as e:
+                self.get_logger().info('Could not get laser -> odom transform: ' + str(e))
+                return
+
+            # Apply laser -> odom transform to map -> laser transform
+            # This gives a map -> odom transform
+            map_laser_matrix = tf_transformations.quaternion_matrix(map_laser_rotation)
+            map_laser_matrix[:3, 3] = map_laser_pos
+            laser_odom_matrix = tf_transformations.quaternion_matrix(laser_odom_quaternion)
+            laser_odom_matrix[:3, 3] = laser_odom_pos
+            map_odom_matrix = np.dot(map_laser_matrix, laser_odom_matrix)
+
+            map_odom_pos = map_odom_matrix[:3, 3]
+            map_odom_rotation = tf_transformations.quaternion_from_matrix(map_odom_matrix)
+            
+            t_map_odom = TransformStamped()
+            t_map_odom.header.stamp = stamp
+            t_map_odom.header.frame_id = 'map'
+            t_map_odom.child_frame_id = 'odom'
+            t_map_odom.transform.translation.x = map_odom_pos[0]
+            t_map_odom.transform.translation.y = map_odom_pos[1]
+            t_map_odom.transform.translation.z = map_odom_pos[2]
+            t_map_odom.transform.rotation.x = map_odom_rotation[0]
+            t_map_odom.transform.rotation.y = map_odom_rotation[1]  
+            t_map_odom.transform.rotation.z = map_odom_rotation[2]
+            t_map_odom.transform.rotation.w = map_odom_rotation[3]
+            self.pub_tf.sendTransform(t_map_odom)
+            
+        # Also publish odometry to facilitate getting the localization pose
         if self.PUBLISH_ODOM:
             odom = Odometry()
-            odom.header.stamp = self.get_clock().now().to_msg()
-            odom.header.frame_id = '/map'
+            odom.header.stamp = stamp
+            odom.header.frame_id = 'map'
             odom.pose.pose.position.x = pose[0]
             odom.pose.pose.position.y = pose[1]
             odom.pose.pose.orientation = Utils.angle_to_quaternion(pose[2])
@@ -268,8 +321,8 @@ class ParticleFiler(Node):
             odom.pose.covariance[:cov_mat.shape[0]] = cov_mat
             odom.twist.twist.linear.x = self.current_speed
             self.odom_pub.publish(odom)
-        
         return
+
 
     def visualize(self):
         '''
