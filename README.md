@@ -22,6 +22,7 @@ For [RangeLibc](https://github.com/f1tenth/range_libc):
 ```
 # No need to clone this in your workspace, we will only use the python wrapper
 git clone https://github.com/f1tenth/range_libc
+sudo apt-get install python3-dev cython3
 cd range_libc/pywrappers
 # on VM
 ./compile.sh
