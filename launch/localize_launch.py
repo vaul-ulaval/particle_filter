@@ -33,7 +33,7 @@ def generate_launch_description():
         executable='map_server',
         name='map_server',
         parameters=[{'yaml_filename': os.path.join(get_package_share_directory('particle_filter'), 'maps', map_name + '.yaml')},
-                    {'topic': 'map'},
+                    {'topic_name': 'map'},
                     {'frame_id': 'map'},
                     {'output': 'screen'},
                     {'use_sim_time': False}]
