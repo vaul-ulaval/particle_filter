@@ -170,7 +170,7 @@ class ParticleFiler(Node):
         self.START_FROM_STARTING_LINE_A = False
         self.START_FROM_STARTING_LINE_B = False
 
-        self.state = ['WAITING', 'INITIALIZED', 'STARTING_LINE', 'READY', 'MOVING', 'STOPPED','UNCERTAIN', 'RECOVERY']
+        self.state = ['WAITING', 'UNLOCKED', 'STARTING_LINE', 'READY', 'LOCALIZE', 'STOPPED','UNCERTAIN', 'RECOVERY']
         self.state_index = 0
         self.localization_enabled = False
         self.pose_before_recovery = PoseWithCovarianceStamped()
@@ -186,8 +186,8 @@ class ParticleFiler(Node):
             self.state = 'STARTING_LINE'
         elif not self.MANUAL_INIT_REQUIRED:
             self.initialize_global()
-            self.state_index = 1
-            self.state = 'INITIALIZED'
+            self.state_index = 7
+            self.state = 'UNCERTAIN'
         else:
             self.state_index = 0
             self.state = 'WAITING'
@@ -465,9 +465,8 @@ class ParticleFiler(Node):
             self.initialize_particles_pose(msg.pose.pose)
         if self.MANUAL_INIT_REQUIRED:
             self.MANUAL_INIT_REQUIRED = False
-            self.event_relocalization = True
             self.state_index = 1
-            self.state = 'INITIALIZED'
+            self.state = 'UNLOCKED'
 
     def initialize_particles_pose(self, pose):
         '''
@@ -481,10 +480,6 @@ class ParticleFiler(Node):
         self.particles[:,1] = pose.position.y + np.random.normal(loc=0.0,scale=0.5,size=self.MAX_PARTICLES)
         self.particles[:,2] = Utils.quaternion_to_angle(pose.orientation) + np.random.normal(loc=0.0,scale=0.4,size=self.MAX_PARTICLES)
         self.state_lock.release()
-
-    def initialize_race_startingline(self):
-        #TODO: parameters for the starting line POSE
-        self.get_logger().info('AT STARTING LINE')
 
     def initialize_global(self):
         '''
@@ -705,6 +700,15 @@ class ParticleFiler(Node):
 
 
     def manual_relocalization_callback(self, msg):
+        '''
+        Callback for the teleop topic. This is used to manually trigger relocalization events.
+        '''
+        if msg.data == 'deadman':
+            self.get_logger().info('Deadman switch triggered')
+            self.localization_to_stop = True
+        elif msg.data == 'special':
+            self.get_logger().info('Special key triggered')
+            self.localization_to_stop = True
 
     def MCL(self, a, o):
         '''
@@ -771,7 +775,7 @@ class ParticleFiler(Node):
                 self.odometry_data = np.zeros(3)
 
 
-                if not self.event_relocalization:
+                if self.localization_enabled:
                     # run the MCL update algorithm
                     self.MCL(action, observation)
 
@@ -780,6 +784,13 @@ class ParticleFiler(Node):
 
                     # publish transformation frame based on inferred pose
                     self.publish_tf(self.inferred_pose, self.last_stamp)
+
+                else:
+                    # if localization is disabled do not update the particles and republish the last pose
+                    self.inferred_pose = self.expected_pose()
+                    self.publish_tf(self.inferred_pose, self.last_stamp)
+                    self.state_index = 5
+                    self.state = 'STOPPED'
 
 
                 self.state_lock.release()
