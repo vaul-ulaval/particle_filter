@@ -172,7 +172,6 @@ class ParticleFiler(Node):
         # these topics are for visualization
         self.pose_pub = self.create_publisher(PoseStamped, '/pf/viz/inferred_pose', 1)
         self.particle_pub = self.create_publisher(PoseArray, '/pf/viz/particles', 1)
-        self.pub_fake_scan = self.create_publisher(LaserScan, '/pf/viz/fake_scan', 1)
         self.rect_pub = self.create_publisher(PolygonStamped, '/pf/viz/poly1', 1)
 
         if self.PUBLISH_ODOM:
@@ -354,14 +353,6 @@ class ParticleFiler(Node):
             else:
                 self.publish_particles(self.particles)
 
-        if self.pub_fake_scan.get_subscription_count() > 0 and isinstance(self.ranges, np.ndarray):
-            # generate the scan from the point of view of the inferred position for visualization
-            self.viz_queries[:,0] = self.inferred_pose[0]
-            self.viz_queries[:,1] = self.inferred_pose[1]
-            self.viz_queries[:,2] = self.downsampled_angles + self.inferred_pose[2]
-            self.range_method.calc_range_many(self.viz_queries, self.viz_ranges)
-            self.publish_scan(self.downsampled_angles, self.viz_ranges)
-
     def publish_particles(self, particles):
         # publish the given particles as a PoseArray object
         pa = PoseArray()
@@ -381,7 +372,6 @@ class ParticleFiler(Node):
         ls.range_min = 0
         ls.range_max = np.max(ranges)
         ls.ranges = ranges
-        self.pub_fake_scan.publish(ls)
 
     def lidarCB(self, msg):
         '''
