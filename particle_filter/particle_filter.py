@@ -163,20 +163,38 @@ class ParticleFiler(Node):
         self.map_client = self.create_client(GetMap, '/map_server/map')
         self.get_omap()
         self.precompute_sensor_model()
-        self.initialize_global()
-
-        # keep track of speed from input odom
-        self.current_speed = 0.0
 
         # event based relocalization state variable
         self.localization_to_stop = False
-        self.manual_init_required = False
-        self.state = ['WAITING', 'INITIALIZED', 'STARTING_LINE', 'MOVING', 'READY', 'RECOVERY', 'STOPPED','UNCERTAIN']
+        self.MANUAL_INIT_REQUIRED = False
+        self.START_FROM_STARTING_LINE_A = False
+        self.START_FROM_STARTING_LINE_B = False
+
+        self.state = ['WAITING', 'INITIALIZED', 'STARTING_LINE', 'READY', 'MOVING', 'STOPPED','UNCERTAIN', 'RECOVERY']
         self.state_index = 0
         self.localization_enabled = False
         self.pose_before_recovery = PoseWithCovarianceStamped()
+        self.starting_line_pose_A = PoseWithCovarianceStamped()
+        self.starting_line_pose_B = PoseWithCovarianceStamped()
+        if self.START_FROM_STARTING_LINE_A:
+            self.initialize_particles_pose(self.starting_line_pose_A)
+            self.state_index = 2
+            self.state = 'STARTING_LINE'
+        elif self.START_FROM_STARTING_LINE_B:
+            self.initialize_particles_pose(self.starting_line_pose_B)
+            self.state_index = 2
+            self.state = 'STARTING_LINE'
+        elif not self.MANUAL_INIT_REQUIRED:
+            self.initialize_global()
+            self.state_index = 1
+            self.state = 'INITIALIZED'
+        else:
+            self.state_index = 0
+            self.state = 'WAITING'
+        
 
-
+        # keep track of speed from input odom
+        self.current_speed = 0.0
 
         # Pub Subs
         # these topics are for visualization
@@ -445,8 +463,8 @@ class ParticleFiler(Node):
             self.initialize_global()
         elif isinstance(msg, PoseWithCovarianceStamped):
             self.initialize_particles_pose(msg.pose.pose)
-        if self.manual_init_required:
-            self.manual_init_required = False
+        if self.MANUAL_INIT_REQUIRED:
+            self.MANUAL_INIT_REQUIRED = False
             self.event_relocalization = True
             self.state_index = 1
             self.state = 'INITIALIZED'
