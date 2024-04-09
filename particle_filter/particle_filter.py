@@ -167,6 +167,8 @@ class ParticleFiler(Node):
 
         # keep track of speed from input odom
         self.current_speed = 0.0
+        # event based relocalisation state variable
+        self.event_relocalisation = True
 
         # Pub Subs
         # these topics are for visualization
@@ -204,6 +206,12 @@ class ParticleFiler(Node):
             PointStamped,
             '/clicked_point',
             self.clicked_pose,
+            1)
+        #subscribe to the teleop topic for manual relocalization via the deadman switch or special key
+        self.event_relocalisation = self.create_subscription(
+            String,
+            '/teleop',
+            self.manual_relocalisation_callback,
             1)
 
         self.get_logger().info('Finished initializing, waiting on messages...')
@@ -559,6 +567,7 @@ class ParticleFiler(Node):
         '''
         
         num_rays = self.downsampled_angles.shape[0]
+        # skip sensor aquisition if event
         # only allocate buffers once to avoid slowness
         if self.first_sensor_update:
             if self.RANGELIB_VAR <= 1:
@@ -730,26 +739,6 @@ class ParticleFiler(Node):
 
                 self.visualize()
 
-# import argparse
-# import sys
-# parser = argparse.ArgumentParser(description='Particle filter.')
-# parser.add_argument('--config', help='Path to yaml file containing config parameters. Helpful for calling node directly with Python for profiling.')
-
-# def load_params_from_yaml(fp):
-#     from yaml import load
-#     with open(fp, 'r') as infile:
-#         yaml_data = load(infile)
-#         for param in yaml_data:
-#             print 'param:', param, ':', yaml_data[param]
-#             rospy.set_param('~'+param, yaml_data[param])
-
-# # this function can be used to generate flame graphs easily
-# def make_flamegraph(filterx=None):
-#     import flamegraph, os
-#     perf_log_path = os.path.join(os.path.dirname(__file__), '../tmp/perf.log')
-#     flamegraph.start_profile_thread(fd=open(perf_log_path, 'w'),
-#                                     filter=filterx,
-#                                     interval=0.001)
 
 def main(args=None):
     rclpy.init(args=args)
@@ -759,14 +748,3 @@ def main(args=None):
 if __name__ == '__main__':
     main()
 
-# if __name__=='__main__':
-#     rospy.init_node('particle_filter')
-
-#     args,_ = parser.parse_known_args()
-#     if args.config:
-#         load_params_from_yaml(args.config)
-
-#     # make_flamegraph(r'update')
-
-#     pf = ParticleFiler()
-#     rospy.spin()
