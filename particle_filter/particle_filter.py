@@ -167,8 +167,16 @@ class ParticleFiler(Node):
 
         # keep track of speed from input odom
         self.current_speed = 0.0
-        # event based relocalisation state variable
-        self.event_relocalisation = True
+
+        # event based relocalization state variable
+        self.localization_to_stop = False
+        self.manual_init_required = False
+        self.state = ['WAITING', 'INITIALIZED', 'STARTING_LINE', 'MOVING', 'READY', 'RECOVERY', 'STOPPED','UNCERTAIN']
+        self.state_index = 0
+        self.localization_enabled = False
+        self.pose_before_recovery = PoseWithCovarianceStamped()
+
+
 
         # Pub Subs
         # these topics are for visualization
@@ -208,10 +216,10 @@ class ParticleFiler(Node):
             self.clicked_pose,
             1)
         #subscribe to the teleop topic for manual relocalization via the deadman switch or special key
-        self.event_relocalisation = self.create_subscription(
+        self.event_relocalization = self.create_subscription(
             String,
             '/teleop',
-            self.manual_relocalisation_callback,
+            self.manual_relocalization_callback,
             1)
 
         self.get_logger().info('Finished initializing, waiting on messages...')
@@ -437,6 +445,11 @@ class ParticleFiler(Node):
             self.initialize_global()
         elif isinstance(msg, PoseWithCovarianceStamped):
             self.initialize_particles_pose(msg.pose.pose)
+        if self.manual_init_required:
+            self.manual_init_required = False
+            self.event_relocalization = True
+            self.state_index = 1
+            self.state = 'INITIALIZED'
 
     def initialize_particles_pose(self, pose):
         '''
@@ -450,6 +463,10 @@ class ParticleFiler(Node):
         self.particles[:,1] = pose.position.y + np.random.normal(loc=0.0,scale=0.5,size=self.MAX_PARTICLES)
         self.particles[:,2] = Utils.quaternion_to_angle(pose.orientation) + np.random.normal(loc=0.0,scale=0.4,size=self.MAX_PARTICLES)
         self.state_lock.release()
+
+    def initialize_race_startingline(self):
+        #TODO: parameters for the starting line POSE
+        self.get_logger().info('AT STARTING LINE')
 
     def initialize_global(self):
         '''
@@ -656,6 +673,21 @@ class ParticleFiler(Node):
         else:
             self.get_logger().info('PLEASE SET rangelib_variant PARAM to 0-4')
 
+    def event_callback(self, event):
+        if event.type == 'STOP':
+            self.localization_enabled = False
+            self.save_state()
+        elif event.type == 'START':
+            self.localization_enabled = True
+            self.reset_particles_in_zones()
+
+    def save_state(self):
+        self.get_logger().info('SAVING STATE')
+        self.get_logger().info(str(self.inferred_pose))
+
+
+    def manual_relocalization_callback(self, msg):
+
     def MCL(self, a, o):
         '''
         Performs one step of Monte Carlo Localization.
@@ -720,16 +752,20 @@ class ParticleFiler(Node):
                 action = np.copy(self.odometry_data)
                 self.odometry_data = np.zeros(3)
 
-                # run the MCL update algorithm
-                self.MCL(action, observation)
 
-                # compute the expected value of the robot pose
-                self.inferred_pose = self.expected_pose()
+                if not self.event_relocalization:
+                    # run the MCL update algorithm
+                    self.MCL(action, observation)
+
+                    # compute the expected value of the robot pose
+                    self.inferred_pose = self.expected_pose()
+
+                    # publish transformation frame based on inferred pose
+                    self.publish_tf(self.inferred_pose, self.last_stamp)
+
+
                 self.state_lock.release()
                 t2 = time.time()
-
-                # publish transformation frame based on inferred pose
-                self.publish_tf(self.inferred_pose, self.last_stamp)
 
                 # this is for tracking particle filter speed
                 ips = 1.0 / (t2 - t1)
