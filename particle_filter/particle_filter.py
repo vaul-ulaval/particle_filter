@@ -92,7 +92,37 @@ class ParticleFiler(Node):
         self.declare_parameter('odometry_topic')
         self.declare_parameter('publish_map_to_odom')
         self.declare_parameter('transform_tolerance')
+        self.declare_parameter('teleop_button_deadman', [0])
+        self.declare_parameter('teleop_button_special', [3])
+        self.declare_parameter('starting_line_pose_A', [0.0, 0.0, 0.0])
+        self.declare_parameter('starting_line_pose_B', [5.0, 5.0, 0.0])
+        self.declare_parameter('localization_modes', ['AUTOMATIC', 'MANUAL', 'RECOVERY'])
+        self.declare_parameter('start_from_starting_line', ['A', 'B', None])
+        self.declare_parameter('manual_initialisation_required', False)
 
+        self.STARTING_LINE_POSE_A_VALS = self.get_parameter('starting_line_pose_A').value
+        self.STARTING_LINE_POSE_B_VALS = self.get_parameter('starting_line_pose_B').value
+        self.TELEOP_DEADMAN = self.get_parameter('teleop_button_deadman').value
+        self.TELEOP_SPECIAL = self.get_parameter('teleop_button_special').value
+        self.MANUAL_INIT_REQUIRED = self.get_parameter('manual_initialisation_required').value
+        self.localization_modes = self.get_parameter('localization_modes').value
+
+        self.starting_line_pose_A = self.create_pose_with_covariance(self.STARTING_LINE_POSE_A_VALS)
+        self.starting_line_pose_B = self.create_pose_with_covariance(self.STARTING_LINE_POSE_B_VALS)
+        
+        self.start_from_starting_line = self.get_parameter('start_from_starting_line').value
+
+        if self.start_from_starting_line == 'A':
+            self.initialize_particles_pose(self.starting_line_pose_A.pose)
+            self.START_FROM_STARTING_LINE_A = True
+            self.START_FROM_STARTING_LINE_B = False
+        elif self.start_from_starting_line == 'B':
+            self.initialize_particles_pose(self.starting_line_pose_B.pose)
+            self.START_FROM_STARTING_LINE_A = False
+            self.START_FROM_STARTING_LINE_B = True
+        else:
+            self.START_FROM_STARTING_LINE_A = False
+            self.START_FROM_STARTING_LINE_B = False
 
         # parameters
         self.ANGLE_STEP           = self.get_parameter('angle_step').value
@@ -167,15 +197,12 @@ class ParticleFiler(Node):
         # event based relocalization state variable
         self.localization_to_stop = False
         self.MANUAL_INIT_REQUIRED = False
-        self.START_FROM_STARTING_LINE_A = False
-        self.START_FROM_STARTING_LINE_B = False
+
 
         self.state = ['WAITING', 'UNLOCKED', 'STARTING_LINE', 'READY', 'LOCALIZE', 'STOPPED','UNCERTAIN', 'RECOVERY']
         self.state_index = 0
         self.localization_enabled = False
         self.pose_before_recovery = PoseWithCovarianceStamped()
-        self.starting_line_pose_A = PoseWithCovarianceStamped()
-        self.starting_line_pose_B = PoseWithCovarianceStamped()
         if self.START_FROM_STARTING_LINE_A:
             self.initialize_particles_pose(self.starting_line_pose_A)
             self.state_index = 2
@@ -233,14 +260,27 @@ class ParticleFiler(Node):
             '/clicked_point',
             self.clicked_pose,
             1)
-        #subscribe to the teleop topic for manual relocalization via the deadman switch or special key
         self.event_relocalization = self.create_subscription(
             String,
-            '/teleop',
+            '/joy',
             self.manual_relocalization_callback,
             1)
 
         self.get_logger().info('Finished initializing, waiting on messages...')
+
+    def create_pose_with_covariance(self, pose_vals):
+        """
+        Utility function to convert a list of pose values into a PoseWithCovarianceStamped object.
+        """
+        pose = PoseWithCovarianceStamped()
+        pose.pose.pose.position.x = pose_vals[0]
+        pose.pose.pose.position.y = pose_vals[1]
+        quaternion = tf_transformations.quaternion_from_euler(0, 0, pose_vals[2])
+        pose.pose.pose.orientation.x = quaternion[0]
+        pose.pose.pose.orientation.y = quaternion[1]
+        pose.pose.pose.orientation.z = quaternion[2]
+        pose.pose.pose.orientation.w = quaternion[3]
+        return pose
 
     def get_omap(self):
         '''
@@ -703,10 +743,10 @@ class ParticleFiler(Node):
         '''
         Callback for the teleop topic. This is used to manually trigger relocalization events.
         '''
-        if msg.data == 'deadman':
+        if msg.data == self.TELEOP_DEADMAN:
             self.get_logger().info('Deadman switch triggered')
             self.localization_to_stop = True
-        elif msg.data == 'special':
+        elif msg.data == self.TELEOP_SPECIAL:
             self.get_logger().info('Special key triggered')
             self.localization_to_stop = True
 
