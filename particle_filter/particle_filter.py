@@ -44,7 +44,7 @@ import tf_transformations
 
 # messages
 from std_msgs.msg import String, Header, Float32MultiArray
-from sensor_msgs.msg import LaserScan
+from sensor_msgs.msg import LaserScan, Joy
 from visualization_msgs.msg import Marker
 from geometry_msgs.msg import Point, Pose, PoseStamped, PoseArray, Quaternion, PolygonStamped, Polygon, Point32, PoseWithCovarianceStamped, PointStamped, TransformStamped
 from nav_msgs.msg import Odometry
@@ -60,7 +60,7 @@ VAR_REPEAT_ANGLES_EVAL_SENSOR_ONE_SHOT = 3
 VAR_RADIAL_CDDT_OPTIMIZATIONS = 4
 
 
-class ParticleFiler(Node):
+class ParticleFilter(Node):
     '''
     This class implements Monte Carlo Localization based on odometry and a laser scanner.
     '''
@@ -97,8 +97,11 @@ class ParticleFiler(Node):
         self.declare_parameter('starting_line_pose_A', [0.0, 0.0, 0.0])
         self.declare_parameter('starting_line_pose_B', [5.0, 5.0, 0.0])
         self.declare_parameter('localization_modes', ['AUTOMATIC', 'MANUAL', 'RECOVERY'])
-        self.declare_parameter('start_from_starting_line', ['A', 'B', None])
+        # self.declare_parameter('start_from_starting_line', ['A', 'B', None])
         self.declare_parameter('manual_initialisation_required', False)
+        self.declare_parameter('initial_pose', [0.0, 0.0, 0.0])
+        self.declare_parameter('distance_behind_last_pose', -1.0)
+
 
         self.STARTING_LINE_POSE_A_VALS = self.get_parameter('starting_line_pose_A').value
         self.STARTING_LINE_POSE_B_VALS = self.get_parameter('starting_line_pose_B').value
@@ -106,23 +109,28 @@ class ParticleFiler(Node):
         self.TELEOP_SPECIAL = self.get_parameter('teleop_button_special').value
         self.MANUAL_INIT_REQUIRED = self.get_parameter('manual_initialisation_required').value
         self.localization_modes = self.get_parameter('localization_modes').value
+        self.distance_behind_last_pose = self.get_parameter('distance_behind_last_pose').value
 
         self.starting_line_pose_A = self.create_pose_with_covariance(self.STARTING_LINE_POSE_A_VALS)
         self.starting_line_pose_B = self.create_pose_with_covariance(self.STARTING_LINE_POSE_B_VALS)
         
-        self.start_from_starting_line = self.get_parameter('start_from_starting_line').value
+        # self.start_from_starting_line = self.get_parameter('start_from_starting_line').value
 
-        if self.start_from_starting_line == 'A':
-            self.initialize_particles_pose(self.starting_line_pose_A.pose)
-            self.START_FROM_STARTING_LINE_A = True
-            self.START_FROM_STARTING_LINE_B = False
-        elif self.start_from_starting_line == 'B':
-            self.initialize_particles_pose(self.starting_line_pose_B.pose)
-            self.START_FROM_STARTING_LINE_A = False
-            self.START_FROM_STARTING_LINE_B = True
-        else:
-            self.START_FROM_STARTING_LINE_A = False
-            self.START_FROM_STARTING_LINE_B = False
+        # if self.start_from_starting_line == 'A':
+        #     self.initialize_particles_pose(self.starting_line_pose_A.pose)
+        #     self.START_FROM_STARTING_LINE_A = True
+        #     self.START_FROM_STARTING_LINE_B = False
+        # elif self.start_from_starting_line == 'B':
+        #     self.initialize_particles_pose(self.starting_line_pose_B.pose)
+        #     self.START_FROM_STARTING_LINE_A = False
+        #     self.START_FROM_STARTING_LINE_B = True
+        # else:
+        #     self.START_FROM_STARTING_LINE_A = False
+        #     self.START_FROM_STARTING_LINE_B = False
+
+
+        self.START_FROM_STARTING_LINE_A = False
+        self.START_FROM_STARTING_LINE_B = False
 
         # parameters
         self.ANGLE_STEP           = self.get_parameter('angle_step').value
@@ -195,6 +203,8 @@ class ParticleFiler(Node):
         self.precompute_sensor_model()
 
         # event based relocalization state variable
+        self.deadman_button_state = False
+        self.special_button_state = False
         self.localization_to_stop = False
         self.MANUAL_INIT_REQUIRED = False
 
@@ -261,7 +271,7 @@ class ParticleFiler(Node):
             self.clicked_pose,
             1)
         self.event_relocalization = self.create_subscription(
-            String,
+            Joy,
             '/joy',
             self.manual_relocalization_callback,
             1)
@@ -637,7 +647,6 @@ class ParticleFiler(Node):
         '''
         
         num_rays = self.downsampled_angles.shape[0]
-        # skip sensor aquisition if event
         # only allocate buffers once to avoid slowness
         if self.first_sensor_update:
             if self.RANGELIB_VAR <= 1:
@@ -726,13 +735,20 @@ class ParticleFiler(Node):
         else:
             self.get_logger().info('PLEASE SET rangelib_variant PARAM to 0-4')
 
-    def event_callback(self, event):
-        if event.type == 'STOP':
-            self.localization_enabled = False
+    def event_callback(self, event_type):
+        if event_type == 'STOP':
             self.save_state()
-        elif event.type == 'START':
-            self.localization_enabled = True
-            self.reset_particles_in_zones()
+        elif event_type == 'START':
+            if self.state_index == 2:
+                self.get_logger().info('Starting from starting line')
+                if self.START_FROM_STARTING_LINE_A:
+                    self.initialize_particles_pose(self.starting_line_pose_A)
+                elif self.START_FROM_STARTING_LINE_B:
+                    self.initialize_particles_pose(self.starting_line_pose_B)
+            else:
+                self.get_logger().info('Starting from previous pose')
+                self.relocalize_behind_last_pose()
+
 
     def save_state(self):
         self.get_logger().info('SAVING STATE')
@@ -741,14 +757,57 @@ class ParticleFiler(Node):
 
     def manual_relocalization_callback(self, msg):
         '''
-        Callback for the teleop topic. This is used to manually trigger relocalization events.
+        Callback for the joy topic. This is used to manually trigger relocalization events.
+        The localization process is active only while the deadman switch (a specific button) is pressed.
+        Localization stops immediately when the button is released.
         '''
-        if msg.data == self.TELEOP_DEADMAN:
-            self.get_logger().info('Deadman switch triggered')
-            self.localization_to_stop = True
-        elif msg.data == self.TELEOP_SPECIAL:
-            self.get_logger().info('Special key triggered')
-            self.localization_to_stop = True
+        deadman_pressed = msg.buttons[self.TELEOP_DEADMAN[0]] == 1
+
+        if deadman_pressed:
+            if not self.localization_enabled:
+                self.get_logger().info('Localization activated by deadman switch')
+                self.event_callback('START')
+            self.localization_enabled = True
+            self.state = 'LOCALIZING'
+        else:
+            if self.localization_enabled:
+                self.get_logger().info('Localization stopped by releasing deadman switch')
+                self.event_callback('STOP')
+            self.localization_enabled = False
+            self.state = 'STOPPED' 
+
+
+
+    def relocalize_behind_last_pose(self):
+        '''
+        Relocalise le robot à une distance spécifiée derrière sa dernière pose connue.
+        '''
+        if not self.localization_enabled:
+            self.inferred_pose = self.expected_pose()
+            self.get_logger().info(f"Last known pose: {self.inferred_pose}")
+            angle = self.inferred_pose[2] 
+            dx = self.distance_behind_last_pose * np.cos(angle)
+            dy = self.distance_behind_last_pose * np.sin(angle)
+
+            new_x = self.inferred_pose[0] + dx
+            new_y = self.inferred_pose[1] + dy
+
+            self.get_logger().info(f'Relocalising to ({new_x}, {new_y}) behind last known pose')
+
+            new_pose_msg = PoseWithCovarianceStamped()
+            new_pose_msg.pose.pose.position.x = new_x
+            new_pose_msg.pose.pose.position.y = new_y
+            quaternion = tf_transformations.quaternion_from_euler(0, 0, angle)
+            new_pose_msg.pose.pose.orientation.x = quaternion[0]
+            new_pose_msg.pose.pose.orientation.y = quaternion[1]
+            new_pose_msg.pose.pose.orientation.z = quaternion[2]
+            new_pose_msg.pose.pose.orientation.w = quaternion[3]
+
+            self.initialize_particles_pose(new_pose_msg.pose.pose) 
+
+            self.localization_enabled = True
+            self.state = 'LOCALIZING'
+
 
     def MCL(self, a, o):
         '''
@@ -815,7 +874,7 @@ class ParticleFiler(Node):
                 self.odometry_data = np.zeros(3)
 
 
-                if self.localization_enabled:
+                if self.localization_enabled and not self.localization_to_stop:
                     # run the MCL update algorithm
                     self.MCL(action, observation)
 
@@ -843,11 +902,12 @@ class ParticleFiler(Node):
                 #     self.get_logger().info(str(['iters per sec:', int(self.timer.fps()), ' possible:', int(self.smoothing.mean())]))
 
                 self.visualize()
+                self.get_logger().info(str(['state:', self.state, 'iters:', self.iters, 'speed:', int(self.timer.fps()), 'possible:', int(self.smoothing.mean())]))
 
 
 def main(args=None):
     rclpy.init(args=args)
-    pf = ParticleFiler()
+    pf = ParticleFilter()
     rclpy.spin(pf)
 
 if __name__ == '__main__':
