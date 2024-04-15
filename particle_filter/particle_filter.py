@@ -50,6 +50,7 @@ from rclpy.node import Node
 
 # messages
 from sensor_msgs.msg import LaserScan
+from message_filters import Subscriber, ApproximateTimeSynchronizer
 from tf2_ros import TransformBroadcaster, TransformListener
 from tf2_ros.buffer import Buffer
 
@@ -186,8 +187,11 @@ class ParticleFiler(Node):
             self.tf_listener = TransformListener(self.tf_buffer, self)
 
         # these topics are to receive data from the racecar
-        self.laser_sub = self.create_subscription(LaserScan, self.get_parameter("scan_topic").value, self.lidarCB, 1)
-        self.odom_sub = self.create_subscription(Odometry, self.get_parameter("odometry_topic").value, self.odomCB, 1)
+        self.scan_sub = Subscriber(self, LaserScan, self.get_parameter("scan_topic").value)
+        self.odom_sub = Subscriber(self, Odometry, self.get_parameter("odometry_topic").value)
+        self.ts = ApproximateTimeSynchronizer([self.scan_sub, self.odom_sub], queue_size=10, slop=0.02)
+        self.ts.registerCallback(self.laser_odom_callback)
+
         self.pose_sub = self.create_subscription(PoseWithCovarianceStamped, "/initialpose", self.clicked_pose, 1)
         self.click_sub = self.create_subscription(PointStamped, "/clicked_point", self.clicked_pose, 1)
 
@@ -375,6 +379,14 @@ class ParticleFiler(Node):
         ls.ranges = ranges
         self.pub_fake_scan.publish(ls)
 
+    def laser_odom_callback(self, laser_msg, odom_msg):
+        """
+        Callback for the synchronized laser and odometry messages.
+        """
+        self.lidarCB(laser_msg)
+        self.odomCB(odom_msg)
+        self.update()
+
     def lidarCB(self, msg):
         """
         Initializes reused buffers, and stores the relevant laser scanner data for later use.
@@ -389,6 +401,7 @@ class ParticleFiler(Node):
 
         # store the necessary scanner information for later processing
         self.downsampled_ranges = np.array(msg.ranges[:: self.ANGLE_STEP])
+        self.last_stamp = msg.header.stamp
         self.lidar_initialized = True
         # self.update()
 
@@ -412,14 +425,14 @@ class ParticleFiler(Node):
 
             self.odometry_data = np.array([local_delta[0, 0], local_delta[0, 1], orientation - self.last_pose[2]])
             self.last_pose = pose
-            self.last_stamp = msg.header.stamp
+            # self.last_stamp = msg.header.stamp
             self.odom_initialized = True
         else:
             self.get_logger().info("...Received first Odometry message")
             self.last_pose = pose
 
         # this topic is slower than lidar, so update every time we receive a message
-        self.update()
+        # self.update()
 
     def clicked_pose(self, msg):
         """
