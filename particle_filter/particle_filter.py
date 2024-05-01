@@ -43,10 +43,11 @@ from geometry_msgs.msg import (
     PoseWithCovarianceStamped,
     TransformStamped,
 )
-from nav_msgs.msg import Odometry
+from nav_msgs.msg import Odometry, OccupancyGrid
 from nav_msgs.srv import GetMap
 from particle_filter import utils as Utils
 from rclpy.node import Node
+from rclpy.qos import qos_profile_action_status_default
 
 # messages
 from sensor_msgs.msg import LaserScan
@@ -160,11 +161,6 @@ class ParticleFiler(Node):
         # initialize the state
         self.smoothing = Utils.CircularArray(10)
         self.timer = Utils.Timer(10)
-        # map service client
-        self.map_client = self.create_client(GetMap, "/map_server/map")
-        self.get_omap()
-        self.precompute_sensor_model()
-        self.initialize_global()
 
         # keep track of speed from input odom
         self.current_speed = 0.0
@@ -189,28 +185,29 @@ class ParticleFiler(Node):
         # these topics are to receive data from the racecar
         self.scan_sub = Subscriber(self, LaserScan, self.get_parameter("scan_topic").value)
         self.odom_sub = Subscriber(self, Odometry, self.get_parameter("odometry_topic").value)
-        self.ts = ApproximateTimeSynchronizer([self.scan_sub, self.odom_sub], queue_size=10, slop=0.02)
+        self.ts = ApproximateTimeSynchronizer([self.scan_sub, self.odom_sub], queue_size=20, slop=0.02)
         self.ts.registerCallback(self.laser_odom_callback)
 
+        self.map_sub = self.create_subscription(OccupancyGrid, "/map", self.map_callback, qos_profile_action_status_default)
         self.pose_sub = self.create_subscription(PoseWithCovarianceStamped, "/initialpose", self.clicked_pose, 1)
         self.click_sub = self.create_subscription(PointStamped, "/clicked_point", self.clicked_pose, 1)
 
         self.get_logger().info("Finished initializing, waiting on messages...")
 
-    def get_omap(self):
+    def map_callback(self, map_msg):
+        self.get_logger().info("Map acquired.")
+        self.init_rangelibc(map_msg)
+        self.precompute_sensor_model()
+        self.initialize_global()
+        self.map_initialized = True
+        self.destroy_subscription(self.map_sub)
+
+    def init_rangelibc(self, map_msg):
         """
-        Fetch the occupancy grid map from the map_server instance, and initialize the correct
-        RangeLibc method. Also stores a matrix which indicates the permissible region of the map
+        Initialize the correct RangeLibc method. Also stores a matrix which indicates the permissible region of the map
         """
 
-        while not self.map_client.wait_for_service(timeout_sec=1.0):
-            self.get_logger().info("Get map service not available, waiting...")
-        req = GetMap.Request()
-        future = self.map_client.call_async(req)
-        rclpy.spin_until_future_complete(self, future)
-        map_msg = future.result().map
         self.map_info = map_msg.info
-
         oMap = range_libc.PyOMap(map_msg)
         self.MAX_RANGE_PX = int(self.MAX_RANGE_METERS / self.map_info.resolution)
 
@@ -237,7 +234,6 @@ class ParticleFiler(Node):
         # 0: not permissible, 1: permissible
         self.permissible_region = np.zeros_like(array_255, dtype=bool)
         self.permissible_region[array_255 == 0] = 1
-        self.map_initialized = True
 
     def publish_tf(self, pose, stamp=None):
         """Publish a tf for the car. This tells ROS where the car is with respect to the map."""
