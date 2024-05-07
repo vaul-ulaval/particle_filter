@@ -47,11 +47,12 @@ from nav_msgs.msg import Odometry, OccupancyGrid
 from nav_msgs.srv import GetMap
 from particle_filter import utils as Utils
 from particle_filter.circular_buffer import CircularBuffer
+from particle_filter.state_machine import StateMachine, State, Event
 from rclpy.node import Node
 from rclpy.qos import qos_profile_action_status_default
 
 # messages
-from sensor_msgs.msg import LaserScan
+from sensor_msgs.msg import LaserScan, Joy
 from message_filters import Subscriber, ApproximateTimeSynchronizer
 from tf2_ros import TransformBroadcaster, TransformListener
 from tf2_ros.buffer import Buffer
@@ -98,6 +99,9 @@ class ParticleFiler(Node):
         self.declare_parameter("odometry_topic")
         self.declare_parameter("publish_map_to_odom")
         self.declare_parameter("transform_tolerance")
+        self.declare_parameter("teleop_button_deadman", [0])
+        self.declare_parameter("teleop_button_special", [3])
+        self.declare_parameter("manual_init_required", True)
 
         # parameters
         self.ANGLE_STEP = self.get_parameter("angle_step").value
@@ -163,6 +167,11 @@ class ParticleFiler(Node):
         self.smoothing = Utils.CircularArray(10)
         self.timer = Utils.Timer(10)
 
+        # initialize teleop button
+        self.TELEOP_DEADMAN = self.get_parameter("teleop_button_deadman").value
+        self.TELEOP_SPECIAL = self.get_parameter("teleop_button_special").value
+        self.MANUAL_INIT_REQUIRED = self.get_parameter("manual_init_required").get_parameter_value().bool_value
+
         # keep track of speed from input odom
         self.current_speed = 0.0
 
@@ -174,6 +183,26 @@ class ParticleFiler(Node):
         self.path_memory = CircularBuffer(self.distance_behind_last_pose, 3)
         self.declare_parameter("debug_path_topic", "/debug_path")
         self.debug_path_pub = self.create_publisher(PoseArray, self.get_parameter("debug_path_topic").value, 1)
+
+        #start the state machine
+        transitions = {
+            State.FALLBACK: {
+                Event.ON: State.WAITING_INIT
+            },
+            State.WAITING_INIT: {
+                Event.INITIALIZE_MANUAL: State.LOCALIZE,
+                Event.OFF: State.FALLBACK
+            },
+            State.LOCALIZE: {
+                Event.STOP_LOCALIZATION: State.STOPPED,
+                Event.OFF: State.FALLBACK
+            },
+            State.STOPPED: {
+                Event.START_LOCALIZATION: State.LOCALIZE,
+                Event.OFF: State.FALLBACK
+            }
+        }
+        self.state_machine = StateMachine(State.FALLBACK, transitions)
 
         # Pub Subs
         # these topics are for visualization
@@ -201,6 +230,10 @@ class ParticleFiler(Node):
         self.map_sub = self.create_subscription(OccupancyGrid, "/map", self.map_callback, qos_profile_action_status_default)
         self.pose_sub = self.create_subscription(PoseWithCovarianceStamped, "/initialpose", self.clicked_pose, 1)
         self.click_sub = self.create_subscription(PointStamped, "/clicked_point", self.clicked_pose, 1)
+        self.event_relocalization = self.create_subscription(
+            Joy, "/joy", self.manual_relocalization_callback, 1
+        ),
+        self.state_machine.trigger(Event.ON)
 
         self.get_logger().info("Finished initializing, waiting on messages...")
 
@@ -454,6 +487,14 @@ class ParticleFiler(Node):
         except Exception as e:
             self.get_logger().info(f"Error updating path memory: {e}")
 
+    def enable_localization(self):
+        self.get_logger().info("Enabling localization")
+        self.state_machine.trigger(Event.START_LOCALIZATION)
+
+    def disable_localization(self):
+        self.get_logger().info("Disabling localization")
+        self.state_machine.trigger(Event.STOP_LOCALIZATION)
+
     def clicked_pose(self, msg):
         """
         Receive pose messages from RViz and initialize the particle distribution in response.
@@ -461,22 +502,32 @@ class ParticleFiler(Node):
         if isinstance(msg, PointStamped):
             self.initialize_global()
         elif isinstance(msg, PoseWithCovarianceStamped):
+            self.state_machine.trigger(Event.INITIALIZE_MANUAL)
             self.initialize_particles_pose(msg.pose.pose)
 
     def initialize_particles_pose(self, pose):
         """
-        Initialize particles in the general region of the provided pose.
+        Initialize particles strictly within the permissible region defined by initialize_global.
+        If the given pose is outside this region, it is adjusted to the nearest permissible location.
         """
-        self.get_logger().info("SETTING POSE")
-        self.get_logger().info(str([pose.position.x, pose.position.y]))
+        self.get_logger().info("Setting pose...")
         self.state_lock.acquire()
+        x_index, y_index, theta = Utils.world_to_map_slow(pose.position.x, pose.position.y, Utils.quaternion_to_angle(pose.orientation), self.map_info)
+
+        if int(x_index) >= self.map_info.width or int(y_index) >= self.map_info.height or int(x_index) < 0 or int(y_index) < 0:
+            self.get_logger().info("Initial pose out of bounds")
+            self.state_lock.release()
+            return
+        elif not self.permissible_region[int(y_index), int(x_index)]:
+            self.get_logger().info("Initial pose not permissible")
+            self.state_lock.release()
+            return
         self.weights = np.ones(self.MAX_PARTICLES) / float(self.MAX_PARTICLES)
         self.particles[:, 0] = pose.position.x + np.random.normal(loc=0.0, scale=0.5, size=self.MAX_PARTICLES)
         self.particles[:, 1] = pose.position.y + np.random.normal(loc=0.0, scale=0.5, size=self.MAX_PARTICLES)
-        self.particles[:, 2] = Utils.quaternion_to_angle(pose.orientation) + np.random.normal(
-            loc=0.0, scale=0.4, size=self.MAX_PARTICLES
-        )
+        self.particles[:, 2] = theta + np.random.normal(loc=0.0, scale=0.4, size=self.MAX_PARTICLES)
         self.state_lock.release()
+        self.state_machine.trigger(Event.INITIALIZE_MANUAL)
 
     def spread_particles_along_path(self):
         path = self.path_memory.get_path()
@@ -525,6 +576,23 @@ class ParticleFiler(Node):
         self.particles = permissible_states
         self.weights[:] = 1.0 / self.MAX_PARTICLES
         self.state_lock.release()
+
+    def manual_relocalization_callback(self, msg):
+        """
+        Callback for the joy topic. This is used to manually trigger relocalization events.
+        The localization process is active only while the deadman switch (a specific button) is pressed.
+        Localization stops immediately when the button is released.
+        """
+        deadman_pressed = msg.buttons[self.TELEOP_DEADMAN[0]] == 1
+
+        if deadman_pressed:
+            if self.state_machine.state == State.WAITING_INIT or State.STOPPED:
+                self.enable_localization()
+        else:
+            if self.state_machine.state == State.LOCALIZE:
+                self.disable_localization()
+                self.spread_particles_along_path()
+
 
     def precompute_sensor_model(self):
         """
@@ -804,17 +872,25 @@ class ParticleFiler(Node):
                 action = np.copy(self.odometry_data)
                 self.odometry_data = np.zeros(3)
 
-                # run the MCL update algorithm
-                self.MCL(action, observation)
+                if self.state_machine.state == State.LOCALIZE:
+                    # run the MCL update algorithm
+                    self.MCL(action, observation)
 
-                # compute the expected value of the robot pose
-                self.inferred_pose = self.expected_pose()
-                self.update_path_memory(self.inferred_pose)
+                    # compute the expected value of the robot pose
+                    self.inferred_pose = self.expected_pose()
+
+                    self.update_path_memory(self.inferred_pose)
+
+                    # publish transformation frame based on inferred pose
+                    self.publish_tf(self.inferred_pose, self.last_stamp)
+
+                else:
+                    # if localization is disabled do not update the particles and republish the last pose
+                    self.inferred_pose = self.expected_pose()
+                    self.publish_tf(self.inferred_pose, self.last_stamp)
+
                 self.state_lock.release()
                 t2 = time.time()
-
-                # publish transformation frame based on inferred pose
-                self.publish_tf(self.inferred_pose, self.last_stamp)
 
                 # this is for tracking particle filter speed
                 ips = 1.0 / (t2 - t1)
@@ -823,7 +899,6 @@ class ParticleFiler(Node):
                 #     self.get_logger().info(str(['iters per sec:', int(self.timer.fps()), ' possible:', int(self.smoothing.mean())]))
 
                 self.visualize()
-
 
 # import argparse
 # import sys
