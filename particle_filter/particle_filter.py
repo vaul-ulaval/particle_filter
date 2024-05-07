@@ -64,6 +64,74 @@ VAR_REPEAT_ANGLES_EVAL_SENSOR = 2
 VAR_REPEAT_ANGLES_EVAL_SENSOR_ONE_SHOT = 3
 VAR_RADIAL_CDDT_OPTIMIZATIONS = 4
 
+from enum import Enum, auto
+
+class State(Enum):
+    UNINIT = auto()
+    UNCERTAIN = auto()
+    WAITING_INIT = auto()
+    STARTING_LINE = auto()
+    READY = auto()
+    LOCALIZE = auto()
+    STOPPED = auto()
+    RECOVERY = auto()
+    BEHIND_LAST_POSE = auto()
+    FAILED_TO_LOCALIZE = auto()
+
+
+class Event(Enum):
+    START_LOCALIZATION = auto()
+    STOP_LOCALIZATION = auto()
+    INITIALIZE_GLOBAL = auto()
+    INITIALIZE_MANUAL = auto()
+    INIT_STARTING_LINE = auto()
+    ERROR_ENCOUNTERED = auto()
+    RECOVER = auto()
+    LOCALIZATION_FAILED = auto() 
+    STARTING_POSE_INITIALIZED = auto()
+
+
+
+
+class CircularBuffer:
+    def __init__(self, max_distance, dim):
+        self.dim = dim
+        self.max_distance = max_distance
+        self.buffer = []
+        self.total_distance = 0.0
+
+
+    def append(self, data):
+        if len(self.buffer) > 0:
+            # Calculate distance from the last pose
+            last_data = self.buffer[-1]
+            increment_distance = np.linalg.norm(last_data[:2] - data[:2])
+            self.total_distance += increment_distance
+
+        # Append new data with its cumulative distance
+        self.buffer.append(data)
+
+        # Remove old poses to maintain the max distance constraint
+        while self.total_distance > self.max_distance:
+            if len(self.buffer) < 2:
+                break
+            # Remove the oldest pose and update the total distance
+            oldest_data = self.buffer.pop(0)
+            next_oldest_data = self.buffer[0]
+            removed_distance = np.linalg.norm(oldest_data[:2] - next_oldest_data[:2])
+            self.total_distance -= removed_distance
+
+    def get_path(self):
+        """ Return all elements in the buffer. """
+        return np.array(self.buffer)
+
+    def __len__(self):
+        return len(self.buffer)
+
+
+
+
+    
 
 class ParticleFilter(Node):
     """
@@ -440,17 +508,24 @@ class ParticleFilter(Node):
             self.pose_pub.publish(ps)
 
         if self.particle_pub.get_subscription_count() > 0:
-            # publish a downsampled version of the particle distribution to avoid a lot of latency
             if self.MAX_PARTICLES > self.MAX_VIZ_PARTICLES:
-                # randomly downsample particles
-                proposal_indices = np.random.choice(
-                    self.particle_indices, self.MAX_VIZ_PARTICLES, p=self.weights
-                )
-                # proposal_indices = np.random.choice(self.particle_indices, self.MAX_VIZ_PARTICLES)
-                self.publish_particles(self.particles[proposal_indices, :])
+                proposal_indices = np.random.choice(self.particle_indices, self.MAX_VIZ_PARTICLES, p=self.weights)
+                self.publish_particles(self.particles[proposal_indices,:])
             else:
                 self.publish_particles(self.particles)
 
+
+        if self.debug_path_pub.get_subscription_count() > 0:
+            pa = PoseArray()
+            pa.header.stamp = self.get_clock().now().to_msg()
+            pa.header.frame_id = "/map"
+            pa.poses = Utils.particles_to_poses(self.path_memory.get_path())
+            self.debug_path_pub.publish(pa)
+    
+    def activate_fallback(self):
+        self.get_logger().info("Activating fallback")
+        self.state_pub.publish("FAILED_TO_LOCALIZE")
+    
     def publish_particles(self, particles):
         # publish the given particles as a PoseArray object
         pa = PoseArray()
@@ -974,8 +1049,6 @@ class ParticleFilter(Node):
                     # if localization is disabled do not update the particles and republish the last pose
                     self.inferred_pose = self.expected_pose()
                     self.publish_tf(self.inferred_pose, self.last_stamp)
-                    self.state_index = 5
-                    self.state = "STOPPED"
 
                 self.state_lock.release()
                 t2 = time.time()
