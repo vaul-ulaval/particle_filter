@@ -6,6 +6,7 @@ from geometry_msgs.msg import Point, Pose, PoseStamped, PoseArray, Quaternion, P
 import tf_transformations
 # import tf2_ros
 import time
+import numpy as np
 
 class CircularArray(object):
     """ Simple implementation of a circular array.
@@ -188,3 +189,7 @@ def world_to_map_slow(x,y,t, map_info):
                       [y]])
     map_c = rot*((world - trans) / float(scale))
     return map_c[0,0],map_c[1,0],t-angle
+
+def normalize_angle(angle):
+    """Normalize an angle to be between -pi and pi"""
+    return np.arctan2(np.sin(angle), np.cos(angle))
