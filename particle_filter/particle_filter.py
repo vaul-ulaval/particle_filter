@@ -32,35 +32,28 @@ from threading import Lock
 from particle_filter import utils as Utils
 
 # TF
-# import tf.transformations
-# import tf
+
 import tf2_ros
 from tf2_ros import TransformBroadcaster
 from tf2_ros import TransformListener
-from tf2_ros import TransformException
 from tf2_ros.buffer import Buffer
 import tf_transformations
 
 
 # messages
-from std_msgs.msg import String, Header, Float32MultiArray
 from sensor_msgs.msg import LaserScan, Joy
 from visualization_msgs.msg import Marker
 from geometry_msgs.msg import (
-    Point,
-    Pose,
     PoseStamped,
     PoseArray,
-    Quaternion,
     PolygonStamped,
-    Polygon,
-    Point32,
     PoseWithCovarianceStamped,
     PointStamped,
     TransformStamped,
 )
 from nav_msgs.msg import Odometry
 from nav_msgs.srv import GetMap
+from std_msgs.msg import String
 
 """
 These flags indicate several variants of the sensor model. Only one of them is used at a time.
@@ -108,13 +101,19 @@ class ParticleFilter(Node):
         self.declare_parameter("teleop_button_special", [3])
         self.declare_parameter("starting_line_pose_A", [0.0, 0.0, 0.0])
         self.declare_parameter("starting_line_pose_B", [5.0, 5.0, 0.0])
-        self.declare_parameter(
-            "localization_modes", ["AUTOMATIC", "MANUAL", "RECOVERY"]
-        )
         # self.declare_parameter('start_from_starting_line', ['A', 'B', None])
-        self.declare_parameter("manual_initialisation_required", False)
+        self.declare_parameter("manual_init_required", 1)
         self.declare_parameter("initial_pose", [0.0, 0.0, 0.0])
-        self.declare_parameter("distance_behind_last_pose", -1.0)
+
+        # recovery parameters
+        self.declare_parameter("distance_behind_last_pose", 4.0)
+        self.distance_behind_last_pose = self.get_parameter(
+            "distance_behind_last_pose"
+        ).value
+        self.path_memory = CircularBuffer(self.distance_behind_last_pose, 3)
+        self.declare_parameter("debug_path_topic", "/debug_path")
+        self.debug_path_pub = self.create_publisher(PoseArray, self.get_parameter("debug_path_topic").value, 1)
+
 
         self.STARTING_LINE_POSE_A_VALS = self.get_parameter(
             "starting_line_pose_A"
@@ -124,36 +123,13 @@ class ParticleFilter(Node):
         ).value
         self.TELEOP_DEADMAN = self.get_parameter("teleop_button_deadman").value
         self.TELEOP_SPECIAL = self.get_parameter("teleop_button_special").value
-        self.MANUAL_INIT_REQUIRED = self.get_parameter(
-            "manual_initialisation_required"
-        ).value
-        self.localization_modes = self.get_parameter("localization_modes").value
-        self.distance_behind_last_pose = self.get_parameter(
-            "distance_behind_last_pose"
-        ).value
+        self.MANUAL_INIT_REQUIRED = self.get_parameter("manual_init_required").get_parameter_value().bool_value
 
-        self.starting_line_pose_A = self.create_pose_with_covariance(
-            self.STARTING_LINE_POSE_A_VALS
-        )
-        self.starting_line_pose_B = self.create_pose_with_covariance(
-            self.STARTING_LINE_POSE_B_VALS
-        )
 
-        # self.start_from_starting_line = self.get_parameter('start_from_starting_line').value
 
-        # if self.start_from_starting_line == 'A':
-        #     self.initialize_particles_pose(self.starting_line_pose_A.pose)
-        #     self.START_FROM_STARTING_LINE_A = True
-        #     self.START_FROM_STARTING_LINE_B = False
-        # elif self.start_from_starting_line == 'B':
-        #     self.initialize_particles_pose(self.starting_line_pose_B.pose)
-        #     self.START_FROM_STARTING_LINE_A = False
-        #     self.START_FROM_STARTING_LINE_B = True
-        # else:
-        #     self.START_FROM_STARTING_LINE_A = False
-        #     self.START_FROM_STARTING_LINE_B = False
 
-        self.START_FROM_STARTING_LINE_A = False
+
+        self.START_FROM_STARTING_LINE_A = True
         self.START_FROM_STARTING_LINE_B = False
 
         # parameters
@@ -230,53 +206,36 @@ class ParticleFilter(Node):
         self.deadman_button_state = False
         self.special_button_state = False
         self.localization_to_stop = False
-        self.MANUAL_INIT_REQUIRED = False
 
-        self.state = [
-            "WAITING",
-            "UNLOCKED",
-            "STARTING_LINE",
-            "READY",
-            "LOCALIZE",
-            "STOPPED",
-            "UNCERTAIN",
-            "RECOVERY",
-        ]
-        self.state_index = 0
         self.localization_enabled = False
         self.pose_before_recovery = PoseWithCovarianceStamped()
-        if self.START_FROM_STARTING_LINE_A:
-            self.initialize_particles_pose(self.starting_line_pose_A)
-            self.state_index = 2
-            self.state = "STARTING_LINE"
-        elif self.START_FROM_STARTING_LINE_B:
-            self.initialize_particles_pose(self.starting_line_pose_B)
-            self.state_index = 2
-            self.state = "STARTING_LINE"
-        elif not self.MANUAL_INIT_REQUIRED:
-            self.initialize_global()
-            self.state_index = 7
-            self.state = "UNCERTAIN"
-        else:
-            self.state_index = 0
-            self.state = "WAITING"
+
+        self.state_pub = self.create_publisher(String, "/pf/state", 1)
+
+
 
         # keep track of speed from input odom
         self.current_speed = 0.0
+
+        self.get_logger().info("Finished initializing, waiting on messages...")
 
         # Pub Subs
         # these topics are for visualization
         self.pose_pub = self.create_publisher(PoseStamped, "/pf/viz/inferred_pose", 1)
         self.particle_pub = self.create_publisher(PoseArray, "/pf/viz/particles", 1)
         self.rect_pub = self.create_publisher(PolygonStamped, "/pf/viz/poly1", 1)
+        self.marker_pub = self.create_publisher(Marker, '/visualization_marker', 10)
+
 
         if self.PUBLISH_ODOM:
+            self.get_logger().info("Publishing odometry")
             self.odom_pub = self.create_publisher(Odometry, "/pf/pose/odom", 1)
 
         # these topics are for coordinate space things
         self.pub_tf = TransformBroadcaster(self)
 
         if self.PUBLISH_MAP_TO_ODOM:
+            self.get_logger().info("Publishing map -> odom")
             self.tf_buffer = Buffer()
             self.tf_listener = TransformListener(self.tf_buffer, self)
 
