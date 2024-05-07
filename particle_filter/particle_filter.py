@@ -544,22 +544,25 @@ class ParticleFilter(Node):
         self.permissible_region[array_255 == 0] = 1
         self.map_initialized = True
 
+
+
     def publish_tf(self, pose, stamp=None):
         """Publish a tf for the car. This tells ROS where the car is with respect to the map."""
-        if stamp == None:
+        if stamp is None:
             stamp = self.get_clock().now().to_msg()
 
+
         t = TransformStamped()
-        # header
+        
         t.header.stamp = stamp
-        t.header.frame_id = "map"
-        t.child_frame_id = "laser"
-        # translation
+        t.header.frame_id = "/map"
+        t.child_frame_id = self.get_namespace() + "/base_link"
+
+        # Set translation and rotation
         t.transform.translation.x = pose[0]
         t.transform.translation.y = pose[1]
         t.transform.translation.z = 0.0
         q = tf_transformations.quaternion_from_euler(0.0, 0.0, pose[2])
-        # rotation
         t.transform.rotation.x = q[0]
         t.transform.rotation.y = q[1]
         t.transform.rotation.z = q[2]
@@ -577,7 +580,7 @@ class ParticleFilter(Node):
             # Get laser -> odom transform.
             try:
                 trans = self.tf_buffer.lookup_transform(
-                    "laser", "odom", rclpy.time.Time()
+                   "odom", "laser", rclpy.time.Time()
                 )
                 laser_odom_pos = np.array(
                     [
@@ -595,9 +598,9 @@ class ParticleFilter(Node):
                     ]
                 )
             except tf2_ros.TransformException as e:
-                self.get_logger().info(
-                    "Could not get laser -> odom transform: " + str(e)
-                )
+                # self.get_logger().info(
+                #     "Could not get laser -> odom transform: " + str(e)
+                # )
                 return
 
             # Apply laser -> odom transform to map -> laser transform
@@ -642,6 +645,7 @@ class ParticleFilter(Node):
             odom.pose.covariance[: cov_mat.shape[0]] = cov_mat
             odom.twist.twist.linear.x = self.current_speed
             self.odom_pub.publish(odom)
+        
         return
 
     def visualize(self):
@@ -650,6 +654,8 @@ class ParticleFilter(Node):
         """
         if not self.DO_VIZ:
             return
+        
+
 
         if self.pose_pub.get_subscription_count() > 0 and isinstance(
             self.inferred_pose, np.ndarray
