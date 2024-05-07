@@ -140,6 +140,10 @@ class ParticleFilter(Node):
 
     def __init__(self):
         super().__init__("particle_filter")
+        self.state = State.WAITING_INIT
+        self.get_logger().info("Initializing...")
+        self.get_logger().info(f"State: {self.state}")
+        
 
         # declare parameters
         self.declare_parameter("angle_step")
@@ -322,9 +326,160 @@ class ParticleFilter(Node):
         )
         self.event_relocalization = self.create_subscription(
             Joy, "/joy", self.manual_relocalization_callback, 1
-        )
+        ),
+        self.initialize_state_machine()
 
         self.get_logger().info("Finished initializing, waiting on messages...")
+
+
+    def initialize_state_machine(self):
+        # Decide initial event based on conditions
+        if not self.MANUAL_INIT_REQUIRED and not self.START_FROM_STARTING_LINE_A and not self.START_FROM_STARTING_LINE_B:
+            self.get_logger().info(f"manual : {self.MANUAL_INIT_REQUIRED}, start from line A: {self.START_FROM_STARTING_LINE_A}, start from line B: {self.START_FROM_STARTING_LINE_B}")
+            initial_event = Event.INITIALIZE_GLOBAL
+        elif self.START_FROM_STARTING_LINE_A or self.START_FROM_STARTING_LINE_B:
+            initial_event = Event.INIT_STARTING_LINE
+        else:
+            initial_event = Event.ERROR_ENCOUNTERED
+        self.transition(initial_event)
+
+    def initialize_startline_pose(self):
+        self.starting_line_pose_A = self.create_pose_with_covariance(
+            self.STARTING_LINE_POSE_A_VALS
+            )
+        self.starting_line_pose_B = self.create_pose_with_covariance(
+            self.STARTING_LINE_POSE_B_VALS
+        )
+
+    def transition(self, event):
+        transitions = {
+            State.UNINIT: {
+                Event.INIT_STARTING_LINE: State.STARTING_LINE,
+                Event.INITIALIZE_GLOBAL: State.UNCERTAIN,
+                Event.INITIALIZE_MANUAL: State.READY,
+                Event.ERROR_ENCOUNTERED: State.RECOVERY,
+            },
+            State.UNCERTAIN: {
+                Event.ERROR_ENCOUNTERED: State.RECOVERY,
+                Event.INITIALIZE_MANUAL: State.READY,
+                Event.RECOVER: State.READY,
+            },
+            State.WAITING_INIT: {
+                Event.ERROR_ENCOUNTERED: State.RECOVERY,
+                Event.INITIALIZE_GLOBAL: State.UNCERTAIN,
+                Event.INITIALIZE_MANUAL: State.READY,
+                Event.STARTING_POSE_INITIALIZED: State.READY,
+            },
+            State.READY: {
+                Event.START_LOCALIZATION: State.LOCALIZE,
+                Event.ERROR_ENCOUNTERED: State.RECOVERY,
+            },
+            State.LOCALIZE: {
+                Event.STOP_LOCALIZATION: State.STOPPED,
+                Event.ERROR_ENCOUNTERED: State.RECOVERY,
+            },
+            State.RECOVERY: {
+                Event.RECOVER: State.READY,
+                Event.LOCALIZATION_FAILED: State.FAILED_TO_LOCALIZE,
+            },
+            State.STOPPED: {
+                Event.START_LOCALIZATION: State.BEHIND_LAST_POSE,
+                Event.INITIALIZE_MANUAL: State.READY,
+                Event.INITIALIZE_GLOBAL: State.UNCERTAIN,
+            },
+            State.BEHIND_LAST_POSE: {
+                Event.RECOVER: State.READY,
+                Event.ERROR_ENCOUNTERED: State.RECOVERY,
+            },
+            State.STARTING_LINE: {
+                Event.STARTING_POSE_INITIALIZED: State.READY,
+                Event.INITIALIZE_MANUAL: State.READY,
+                Event.INITIALIZE_GLOBAL: State.UNCERTAIN,
+            },
+            State.FAILED_TO_LOCALIZE: {
+                Event.RECOVER: State.READY,
+            },
+        }
+            
+        if event in transitions[self.state]:
+            self.state = transitions[self.state][event]
+            self.on_enter_state()
+
+    def on_enter_state(self):
+        self.get_logger().info(f"Entering state {self.state}")
+        msg = String()
+        msg.data = self.state.name
+        if self.state_pub.get_subscription_count() > 0:
+            self.state_pub.publish(msg)
+        if self.state == State.UNINIT:
+            if self.MANUAL_INIT_REQUIRED:
+                self.get_logger().info("Manual initialization required")
+            elif not self.MANUAL_INIT_REQUIRED and not self.START_FROM_STARTING_LINE_A and not self.START_FROM_STARTING_LINE_B:
+                self.get_logger().info("Automatic initialization")
+                self.initialize_global()
+            elif self.START_FROM_STARTING_LINE_A or self.START_FROM_STARTING_LINE_B:
+                self.get_logger().info("Starting from starting line")
+                self.transition(Event.INIT_STARTING_LINE)
+
+        elif self.state == State.WAITING_INIT:
+            self.get_logger().info("Waiting for initialization")
+            if self.MANUAL_INIT_REQUIRED:
+                self.get_logger().info("Manual initialization required")
+            else:
+                self.get_logger().info("Automatic initialization")
+                self.initialize_global()
+        elif self.state == State.READY:
+            self.get_logger().info("Ready to localize")
+            self.transition(Event.START_LOCALIZATION)
+        elif self.state == State.STARTING_LINE:
+            if not self.START_FROM_STARTING_LINE_A and not self.START_FROM_STARTING_LINE_B:
+                self.get_logger().info("Starting line not set")
+                self.transition(Event.ERROR_ENCOUNTERED)
+            elif self.START_FROM_STARTING_LINE_A and self.STARTING_LINE_POSE_A_VALS:
+                self.get_logger().info("Starting from line A")
+                self.inferred_pose = self.STARTING_LINE_POSE_A_VALS
+                self.publish_tf(self.STARTING_LINE_POSE_A_VALS)
+                self.transition(Event.STARTING_POSE_INITIALIZED)
+            elif self.START_FROM_STARTING_LINE_B and self.STARTING_LINE_POSE_B_VALS:
+                self.get_logger().info("Starting from line B")
+                self.inferred_pose = self.STARTING_LINE_POSE_B_VALS
+                self.publish_tf(self.STARTING_LINE_POSE_B_VALS)
+                self.transition(Event.STARTING_POSE_INITIALIZED)
+            elif self.START_FROM_STARTING_LINE_A and not self.STARTING_LINE_POSE_A_VALS or self.START_FROM_STARTING_LINE_B and not self.STARTING_LINE_POSE_B_VALS:
+                self.get_logger().info("Starting line pose not set")
+                self.transition(Event.ERROR_ENCOUNTERED)
+            else:
+                self.get_logger().info("Starting line not set")
+                self.transition(Event.ERROR_ENCOUNTERED)
+        elif self.state == State.LOCALIZE:
+            self.get_logger().info("Localizing")
+            self.enable_localization()
+        elif self.state == State.STOPPED:
+            self.get_logger().info("Stopped")
+            self.disable_localization()
+        elif self.state == State.RECOVERY:
+            self.get_logger().info("Recovery")
+            try:
+                self.attempt_recovery()
+            except Exception as e:
+                self.get_logger().info(f"Recovery failed: {e}")
+                self.transition(Event.LOCALIZATION_FAILED)
+        elif self.state == State.BEHIND_LAST_POSE:
+            self.get_logger().info("Behind last pose")
+            self.spread_particles_along_path()
+            self.transition(Event.RECOVER)
+        elif self.state == State.FAILED_TO_LOCALIZE:
+            self.get_logger().info("Failed to localize")
+            self.activate_fallback()
+        elif self.state == State.UNCERTAIN:
+            self.get_logger().info("Uncertain state")
+            self.initialize_global()
+        else:
+            self.get_logger().info("State not recognized")
+            self.transition(Event.ERROR_ENCOUNTERED)
+           
+
+
 
     def create_pose_with_covariance(self, pose_vals):
         """
@@ -348,6 +503,7 @@ class ParticleFilter(Node):
 
         while not self.map_client.wait_for_service(timeout_sec=1.0):
             self.get_logger().info("Get map service not available, waiting...")
+            self.get_logger().info(f"Service: {self.map_client.srv_name}")
         req = GetMap.Request()
         future = self.map_client.call_async(req)
         rclpy.spin_until_future_complete(self, future)
@@ -569,7 +725,7 @@ class ParticleFilter(Node):
         # store the necessary scanner information for later processing
         self.downsampled_ranges = np.array(msg.ranges[:: self.ANGLE_STEP])
         self.lidar_initialized = True
-        # self.update()
+        self.update()
 
     def odomCB(self, msg):
         """
