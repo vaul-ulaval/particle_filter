@@ -46,6 +46,7 @@ from geometry_msgs.msg import (
 from nav_msgs.msg import Odometry, OccupancyGrid
 from nav_msgs.srv import GetMap
 from particle_filter import utils as Utils
+from particle_filter.circular_buffer import CircularBuffer
 from rclpy.node import Node
 from rclpy.qos import qos_profile_action_status_default
 
@@ -164,6 +165,15 @@ class ParticleFiler(Node):
 
         # keep track of speed from input odom
         self.current_speed = 0.0
+
+        # keep last inferred pose and debug topic
+        self.declare_parameter("distance_behind_last_pose", 4.0)
+        self.distance_behind_last_pose = self.get_parameter(
+            "distance_behind_last_pose"
+        ).value
+        self.path_memory = CircularBuffer(self.distance_behind_last_pose, 3)
+        self.declare_parameter("debug_path_topic", "/debug_path")
+        self.debug_path_pub = self.create_publisher(PoseArray, self.get_parameter("debug_path_topic").value, 1)
 
         # Pub Subs
         # these topics are for visualization
@@ -354,6 +364,13 @@ class ParticleFiler(Node):
             self.range_method.calc_range_many(self.viz_queries, self.viz_ranges)
             self.publish_scan(self.downsampled_angles, self.viz_ranges)
 
+        if self.debug_path_pub.get_subscription_count() > 0:
+            pa = PoseArray()
+            pa.header.stamp = self.get_clock().now().to_msg()
+            pa.header.frame_id = "/map"
+            pa.poses = Utils.particles_to_poses(self.path_memory.get_path())
+            self.debug_path_pub.publish(pa)
+
     def publish_particles(self, particles):
         # publish the given particles as a PoseArray object
         pa = PoseArray()
@@ -430,6 +447,13 @@ class ParticleFiler(Node):
         # this topic is slower than lidar, so update every time we receive a message
         # self.update()
 
+    def update_path_memory(self, pose):
+        try:
+            x, y, theta = pose[0], pose[1], pose[2]
+            self.path_memory.append(np.array([x, y, theta]))
+        except Exception as e:
+            self.get_logger().info(f"Error updating path memory: {e}")
+
     def clicked_pose(self, msg):
         """
         Receive pose messages from RViz and initialize the particle distribution in response.
@@ -453,6 +477,34 @@ class ParticleFiler(Node):
             loc=0.0, scale=0.4, size=self.MAX_PARTICLES
         )
         self.state_lock.release()
+
+    def spread_particles_along_path(self):
+        path = self.path_memory.get_path()
+        if len(path) == 0:
+            self.get_logger().info("No path data available for particle spreading.")
+            return
+        
+        num_particles_per_pose = max(1, self.MAX_PARTICLES // len(path))
+        new_particles = np.zeros((self.MAX_PARTICLES, 3))
+
+        index = 0
+        for pose in path:
+            x, y, theta = pose
+            for i in range(num_particles_per_pose):
+                new_x = x + np.random.normal(0, 0.3)
+                new_y = y + np.random.normal(0, 0.15)
+                new_theta = theta + np.random.normal(0, 0.2)
+
+                new_particles[index] = [new_x, new_y, new_theta]
+                index += 1
+
+        if index > 0:
+            self.particles[:index] = new_particles[:index]
+            self.weights[:index] = 1.0 / index
+            self.weights[index:] = 0
+        else:
+            self.get_logger().info("No permissible particles generated.")
+        self.get_logger().info("Particles spread along path.")
 
     def initialize_global(self):
         """
@@ -757,6 +809,7 @@ class ParticleFiler(Node):
 
                 # compute the expected value of the robot pose
                 self.inferred_pose = self.expected_pose()
+                self.update_path_memory(self.inferred_pose)
                 self.state_lock.release()
                 t2 = time.time()
 
