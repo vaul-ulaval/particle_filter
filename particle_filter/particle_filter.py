@@ -600,7 +600,77 @@ class ParticleFilter(Node):
             self.last_pose = pose
 
         # this topic is slower than lidar, so update every time we receive a message
-        self.update()
+        #self.update()
+
+    def update_path_memory(self, pose):
+        try:
+            x, y, theta = pose[0], pose[1], pose[2]
+            self.path_memory.append(np.array([x, y, theta]))
+        except Exception as e:
+            self.get_logger().info(f"Error updating path memory: {e}")
+
+
+
+    def enable_localization(self):
+        self.get_logger().info("Enabling localization")
+        self.localization_enabled = True
+        self.transition(Event.START_LOCALIZATION)
+
+    def disable_localization(self):
+        self.get_logger().info("Disabling localization")
+        self.localization_enabled = False
+        self.transition(Event.STOP_LOCALIZATION)
+
+    def attempt_recovery(self):
+        self.get_logger().info("Attempting recovery")
+        if self.pose_before_recovery is not None:
+            self.pose_before_recovery = self.inferred_pose
+            self.transition(Event.RECOVER)
+        else:
+            self.get_logger().info("No pose before recovery")
+            self.transition(Event.LOCALIZATION_FAILED)
+
+    def check_for_a_probable_zone(self):
+        self.get_logger().info("Checking for a probable zone")
+        # Lock the state to prevent concurrent modifications
+        self.state_lock.acquire()
+        # Calculate the covariance matrix with weighting
+        cov_mat = np.cov(self.particles, rowvar=False, ddof=0, aweights=self.weights)
+        counter = 0
+        size = len(self.particles)  # Size of particles
+
+        # Initialize probable_pose with the maximum possible size
+        probable_pose = np.empty((self.MAX_PARTICLES, 3), dtype=float)
+
+        # Loop over the covariance matrix to find particles with low covariance
+        for i in range(len(cov_mat)):
+            print("Type of probable_pose[i]:", type(probable_pose[i]))
+            print("Shape of probable_pose[i]:", probable_pose[i].shape)
+            print("Type of self.particles[i]:", type(self.particles[i]))
+            print("Content of self.particles[i]:", self.particles[i])
+            if np.any(cov_mat[i] < 0.1):  # Check if any covariance element is less than 0.1
+                probable_pose[counter] = self.particles[i]
+                counter += 1
+            else:
+                    self.get_logger().info(f"No probable zone found on {i}")
+
+        # Check if any probable zone was found
+        if counter > 0:
+            self.get_logger().info(f"Probable zone found: {probable_pose[:counter]}")  # Log only the relevant part
+            self.weights = np.ones(self.MAX_PARTICLES) / float(self.MAX_PARTICLES)  # Reset weights
+            self.particles = np.zeros((self.MAX_PARTICLES, 3))  # Reinitialize the particles array
+            self.particles[:counter] = probable_pose[:counter]  # Assign only the probable poses
+            self.transition(Event.RECOVER)  # Transition to READY state
+        else:
+            self.get_logger().info("No probable zone found")
+            self.initialize_global()  # Reinitialize globally if no zone found
+
+        # Release the lock after processing
+        self.state_lock.release()
+
+
+
+
 
     def clicked_pose(self, msg):
         """
@@ -610,29 +680,63 @@ class ParticleFilter(Node):
             self.initialize_global()
         elif isinstance(msg, PoseWithCovarianceStamped):
             self.initialize_particles_pose(msg.pose.pose)
-        if self.MANUAL_INIT_REQUIRED:
-            self.MANUAL_INIT_REQUIRED = False
-            self.state_index = 1
-            self.state = "UNLOCKED"
+            
+
+
 
     def initialize_particles_pose(self, pose):
         """
-        Initialize particles in the general region of the provided pose.
+        Initialize particles strictly within the permissible region defined by initialize_global.
+        If the given pose is outside this region, it is adjusted to the nearest permissible location.
         """
-        self.get_logger().info("SETTING POSE")
-        self.get_logger().info(str([pose.position.x, pose.position.y]))
+        self.get_logger().info("Setting pose...")
         self.state_lock.acquire()
+        x_index, y_index, theta = Utils.world_to_map_slow(pose.position.x, pose.position.y, Utils.quaternion_to_angle(pose.orientation), self.map_info)
+
+        if int(x_index) >= self.map_info.width or int(y_index) >= self.map_info.height or int(x_index) < 0 or int(y_index) < 0:
+            self.get_logger().info("Initial pose out of bounds")
+            self.state_lock.release()
+            return
+        elif not self.permissible_region[int(y_index), int(x_index)]:
+            self.get_logger().info("Initial pose not permissible")
+            self.state_lock.release()
+            return
         self.weights = np.ones(self.MAX_PARTICLES) / float(self.MAX_PARTICLES)
-        self.particles[:, 0] = pose.position.x + np.random.normal(
-            loc=0.0, scale=0.5, size=self.MAX_PARTICLES
-        )
-        self.particles[:, 1] = pose.position.y + np.random.normal(
-            loc=0.0, scale=0.5, size=self.MAX_PARTICLES
-        )
-        self.particles[:, 2] = Utils.quaternion_to_angle(
-            pose.orientation
-        ) + np.random.normal(loc=0.0, scale=0.4, size=self.MAX_PARTICLES)
+        self.particles[:, 0] = pose.position.x + np.random.normal(loc=0.0, scale=0.5, size=self.MAX_PARTICLES)
+        self.particles[:, 1] = pose.position.y + np.random.normal(loc=0.0, scale=0.5, size=self.MAX_PARTICLES)
+        self.particles[:, 2] = theta + np.random.normal(loc=0.0, scale=0.4, size=self.MAX_PARTICLES)
         self.state_lock.release()
+        self.transition(Event.INITIALIZE_MANUAL)
+        
+
+    def spread_particles_along_path(self):
+        path = self.path_memory.get_path()
+        if len(path) == 0:
+            self.get_logger().info("No path data available for particle spreading.")
+            return
+        
+        num_particles_per_pose = max(1, self.MAX_PARTICLES // len(path))
+        new_particles = np.zeros((self.MAX_PARTICLES, 3))
+
+        index = 0
+        for pose in path:
+            x, y, theta = pose
+            for i in range(num_particles_per_pose):
+                new_x = x + np.random.normal(0, 0.3)
+                new_y = y + np.random.normal(0, 0.15)
+                new_theta = theta + np.random.normal(0, 0.2)
+
+                new_particles[index] = [new_x, new_y, new_theta]
+                index += 1
+
+        if index > 0:
+            self.particles[:index] = new_particles[:index]
+            self.weights[:index] = 1.0 / index
+            self.weights[index:] = 0
+        else:
+            self.get_logger().info("No permissible particles generated.")
+        self.get_logger().info("Particles spread along path.")
+
 
     def initialize_global(self):
         """
@@ -642,6 +746,7 @@ class ParticleFilter(Node):
         # randomize over grid coordinate space
         self.state_lock.acquire()
         permissible_x, permissible_y = np.where(self.permissible_region == 1)
+        self.get_logger().info("Permissible x: " + str(permissible_x))
         indices = np.random.randint(0, len(permissible_x), size=self.MAX_PARTICLES)
 
         permissible_states = np.zeros((self.MAX_PARTICLES, 3))
@@ -652,7 +757,11 @@ class ParticleFilter(Node):
         Utils.map_to_world(permissible_states, self.map_info)
         self.particles = permissible_states
         self.weights[:] = 1.0 / self.MAX_PARTICLES
+        self.get_logger().info("Done initializing particles")
+        self.get_logger().info("Particles: " + str(self.particles))
         self.state_lock.release()
+        self.transition(Event.INITIALIZE_GLOBAL)
+
 
     def precompute_sensor_model(self):
         """
@@ -885,22 +994,17 @@ class ParticleFilter(Node):
             self.get_logger().info("PLEASE SET rangelib_variant PARAM to 0-4")
 
     def event_callback(self, event_type):
-        if event_type == "STOP":
-            self.save_state()
-        elif event_type == "START":
-            if self.state_index == 2:
-                self.get_logger().info("Starting from starting line")
-                if self.START_FROM_STARTING_LINE_A:
-                    self.initialize_particles_pose(self.starting_line_pose_A)
-                elif self.START_FROM_STARTING_LINE_B:
-                    self.initialize_particles_pose(self.starting_line_pose_B)
-            else:
-                self.get_logger().info("Starting from previous pose")
-                self.relocalize_behind_last_pose()
+        """
+        Handle external events by triggering state transitions
+        """
+        # Map external event types to internal Event enum
+        event_mapping = {
+            "STOP": Event.STOP_LOCALIZATION,
+            "START": Event.START_LOCALIZATION
+        }
 
-    def save_state(self):
-        self.get_logger().info("SAVING STATE")
-        self.get_logger().info(str(self.inferred_pose))
+        if event_type in event_mapping:
+            self.transition(event_mapping[event_type])
 
     def manual_relocalization_callback(self, msg):
         """
@@ -908,54 +1012,19 @@ class ParticleFilter(Node):
         The localization process is active only while the deadman switch (a specific button) is pressed.
         Localization stops immediately when the button is released.
         """
-        deadman_pressed = msg.buttons[self.TELEOP_DEADMAN[0]] == 1
+        deadman_pressed = msg.buttons[self.TELEOP_DEADMAN[0]] == 0
 
         if deadman_pressed:
-            if not self.localization_enabled:
-                self.get_logger().info("Localization activated by deadman switch")
-                self.event_callback("START")
-            self.localization_enabled = True
-            self.state = "LOCALIZING"
+            self.get_logger().info("Localization activated by deadman switch")
+            self.localization_to_stop = False
+            self.transition(Event.START_LOCALIZATION)
         else:
-            if self.localization_enabled:
-                self.get_logger().info(
-                    "Localization stopped by releasing deadman switch"
-                )
-                self.event_callback("STOP")
-            self.localization_enabled = False
-            self.state = "STOPPED"
+            self.get_logger().info("Localization stopped by releasing deadman switch")
+            self.localization_to_stop = True
+            self.transition(Event.STOP_LOCALIZATION)
 
-    def relocalize_behind_last_pose(self):
-        """
-        Relocalise le robot à une distance spécifiée derrière sa dernière pose connue.
-        """
-        if not self.localization_enabled:
-            self.inferred_pose = self.expected_pose()
-            self.get_logger().info(f"Last known pose: {self.inferred_pose}")
-            angle = self.inferred_pose[2]
-            dx = self.distance_behind_last_pose * np.cos(angle)
-            dy = self.distance_behind_last_pose * np.sin(angle)
 
-            new_x = self.inferred_pose[0] + dx
-            new_y = self.inferred_pose[1] + dy
 
-            self.get_logger().info(
-                f"Relocalising to ({new_x}, {new_y}) behind last known pose"
-            )
-
-            new_pose_msg = PoseWithCovarianceStamped()
-            new_pose_msg.pose.pose.position.x = new_x
-            new_pose_msg.pose.pose.position.y = new_y
-            quaternion = tf_transformations.quaternion_from_euler(0, 0, angle)
-            new_pose_msg.pose.pose.orientation.x = quaternion[0]
-            new_pose_msg.pose.pose.orientation.y = quaternion[1]
-            new_pose_msg.pose.pose.orientation.z = quaternion[2]
-            new_pose_msg.pose.pose.orientation.w = quaternion[3]
-
-            self.initialize_particles_pose(new_pose_msg.pose.pose)
-
-            self.localization_enabled = True
-            self.state = "LOCALIZING"
 
     def MCL(self, a, o):
         """
@@ -1042,6 +1111,8 @@ class ParticleFilter(Node):
                     # compute the expected value of the robot pose
                     self.inferred_pose = self.expected_pose()
 
+                    self.update_path_memory(self.inferred_pose)
+
                     # publish transformation frame based on inferred pose
                     self.publish_tf(self.inferred_pose, self.last_stamp)
 
@@ -1060,20 +1131,6 @@ class ParticleFilter(Node):
                 #     self.get_logger().info(str(['iters per sec:', int(self.timer.fps()), ' possible:', int(self.smoothing.mean())]))
 
                 self.visualize()
-                self.get_logger().info(
-                    str(
-                        [
-                            "state:",
-                            self.state,
-                            "iters:",
-                            self.iters,
-                            "speed:",
-                            int(self.timer.fps()),
-                            "possible:",
-                            int(self.smoothing.mean()),
-                        ]
-                    )
-                )
 
 
 def main(args=None):
