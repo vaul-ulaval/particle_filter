@@ -11,13 +11,13 @@ particle_filter:
     max_particles: 2000
     squash_factor: 2.2
     # visualization
-    viz: 0
+    viz: 1
     max_viz_particles: 60
     # ray marching method
     range_method: 'rmgpu'
     theta_discretization: 112
     # range data filtering
-    max_range: 10
+    max_range: 20
     fine_timing: 0
     publish_odom: 1
     # sensor model constants
@@ -33,18 +33,10 @@ particle_filter:
     # sensor model variant, variant 2 good for rmgpu, 3 doesn't work for rmgpu
     rangelib_variant: 2
     # Manual Initialization & Relocalization
-    manual_init_required: true
+    manual_init_required: false
     # Starting poses for races
-    starting_line_pose_A: [0.0, 0.0, 0.0]  
-    starting_line_pose_B: [5.0, 5.0, 0.0]
+    starting_line_pose_A: [-0.44,-1.29, 0.0]
+    starting_line_pose_B: [0.0, 4.0, 0.015]
     # Teleop buttons
     teleop_button_deadman: [0] # A on xbox [1] = B  [2]= X
     teleop_button_special: [3] # Y on xbox
-    # Localization modes
-    localization_modes: ['AUTOMATIC', 'MANUAL', 'RECOVERY']
-
-map_server:
-  ros__parameters:
-    # assuming map file is in particle_filter/maps
-    map: 'plt-20-sept'
-
