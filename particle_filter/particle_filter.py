@@ -45,6 +45,7 @@ from geometry_msgs.msg import (
 )
 from nav_msgs.msg import Odometry, OccupancyGrid
 from nav_msgs.srv import GetMap
+from std_msgs.msg import String
 from particle_filter import utils as Utils
 from particle_filter.circular_buffer import CircularBuffer
 from particle_filter.state_machine import StateMachine, State, Event
@@ -182,27 +183,40 @@ class ParticleFiler(Node):
         ).value
         self.path_memory = CircularBuffer(self.distance_behind_last_pose, 3)
         self.declare_parameter("debug_path_topic", "/debug_path")
+        self.declare_parameter("actual_state_topic", "/pf/state")
         self.debug_path_pub = self.create_publisher(PoseArray, self.get_parameter("debug_path_topic").value, 1)
+        self.actual_state_pub = self.create_publisher(String, "actual_state_topic", 1)
 
         #start the state machine
         transitions = {
             State.FALLBACK: {
-                Event.ON: State.WAITING_INIT
-            },
-            State.WAITING_INIT: {
-                Event.INITIALIZE_MANUAL: State.LOCALIZE,
-                Event.OFF: State.FALLBACK
+                Event.ON: State.LOCALIZE,
+                Event.INITIALIZE_MANUAL: State.LOCALIZE
             },
             State.LOCALIZE: {
+                Event.STOP_RECORDING_POSE: State.STOPPED,
+                Event.ENABLE_RECOVERY: State.RECOVERY,
+                Event.OFF: State.FALLBACK
+            },
+            State.RECOVERY: {
+                Event.RECOVERED: State.LOCALIZE,
+                Event.INITIALIZE_MANUAL: State.LOCALIZE,
                 Event.STOP_LOCALIZATION: State.STOPPED,
                 Event.OFF: State.FALLBACK
             },
             State.STOPPED: {
                 Event.START_LOCALIZATION: State.LOCALIZE,
+                Event.INITIALIZE_MANUAL: State.LOCALIZE,
+                Event.ENABLE_RECOVERY: State.RECOVERY,
                 Event.OFF: State.FALLBACK
             }
         }
-        self.state_machine = StateMachine(State.FALLBACK, transitions)
+        self.state_machine = StateMachine(State.LOCALIZE, transitions)
+
+        def on_state_change():
+            self.actual_state_pub.publish(String(data=self.state_machine.state.name))
+
+        self.state_machine.on_enter_state = on_state_change
 
         # Pub Subs
         # these topics are for visualization
@@ -301,7 +315,7 @@ class ParticleFiler(Node):
         if not self.PUBLISH_MAP_TO_ODOM:
             self.pub_tf.sendTransform(t)
 
-        # Check if we need to publish map -> odom transform
+
         if self.PUBLISH_MAP_TO_ODOM:
             # Get map -> laser transform.
             map_laser_pos = np.array((pose[0], pose[1], 0))
@@ -487,13 +501,12 @@ class ParticleFiler(Node):
         except Exception as e:
             self.get_logger().info(f"Error updating path memory: {e}")
 
-    def enable_localization(self):
-        self.get_logger().info("Enabling localization")
-        self.state_machine.trigger(Event.START_LOCALIZATION)
+    def enable_recovery(self):
+        self.get_logger().info("Enabling recovery next iteration")
+        self.state_machine.trigger(Event.ENABLE_RECOVERY)
 
-    def disable_localization(self):
-        self.get_logger().info("Disabling localization")
-        self.state_machine.trigger(Event.STOP_LOCALIZATION)
+    def disable_pose_recording(self):
+        self.state_machine.trigger(Event.STOP_RECORDING_POSE)
 
     def clicked_pose(self, msg):
         """
@@ -510,6 +523,7 @@ class ParticleFiler(Node):
         Initialize particles strictly within the permissible region defined by initialize_global.
         If the given pose is outside this region, it is adjusted to the nearest permissible location.
         """
+        self.state_machine.trigger(Event.INITIALIZE_MANUAL)
         self.get_logger().info("Setting pose...")
         self.state_lock.acquire()
         x_index, y_index, theta = Utils.world_to_map_slow(pose.position.x, pose.position.y, Utils.quaternion_to_angle(pose.orientation), self.map_info)
@@ -527,7 +541,7 @@ class ParticleFiler(Node):
         self.particles[:, 1] = pose.position.y + np.random.normal(loc=0.0, scale=0.5, size=self.MAX_PARTICLES)
         self.particles[:, 2] = theta + np.random.normal(loc=0.0, scale=0.4, size=self.MAX_PARTICLES)
         self.state_lock.release()
-        self.state_machine.trigger(Event.INITIALIZE_MANUAL)
+        
 
     def spread_particles_along_path(self):
         path = self.path_memory.get_path()
@@ -584,14 +598,18 @@ class ParticleFiler(Node):
         Localization stops immediately when the button is released.
         """
         deadman_pressed = msg.buttons[self.TELEOP_DEADMAN[0]] == 1
+        d_pad_pressed = msg.buttons[self.TELEOP_SPECIAL[0]] == 1
 
         if deadman_pressed:
-            if self.state_machine.state == State.WAITING_INIT or State.STOPPED:
-                self.enable_localization()
-        else:
-            if self.state_machine.state == State.LOCALIZE:
-                self.disable_localization()
+            if self.state_machine.state == State.RECOVERY:
                 self.spread_particles_along_path()
+                self.state_machine.trigger(Event.RECOVERED)
+            else:
+                self.state_machine.trigger(Event.START_LOCALIZATION)
+        elif d_pad_pressed:
+                self.enable_recovery()
+        else:
+            self.disable_pose_recording()
 
 
     def precompute_sensor_model(self):
@@ -872,22 +890,22 @@ class ParticleFiler(Node):
                 action = np.copy(self.odometry_data)
                 self.odometry_data = np.zeros(3)
 
-                if self.state_machine.state == State.LOCALIZE:
+                if self.state_machine.state is not State.RECOVERY:
                     # run the MCL update algorithm
                     self.MCL(action, observation)
 
                     # compute the expected value of the robot pose
                     self.inferred_pose = self.expected_pose()
 
-                    self.update_path_memory(self.inferred_pose)
+                    if self.state_machine.state is not State.STOPPED:
+                        self.update_path_memory(self.inferred_pose)
 
                     # publish transformation frame based on inferred pose
                     self.publish_tf(self.inferred_pose, self.last_stamp)
 
                 else:
-                    # if localization is disabled do not update the particles and republish the last pose
                     self.inferred_pose = self.expected_pose()
-                    self.publish_tf(self.inferred_pose, self.last_stamp)
+                    # self.publish_tf(self.inferred_pose, self.last_stamp)
 
                 self.state_lock.release()
                 t2 = time.time()
@@ -895,8 +913,8 @@ class ParticleFiler(Node):
                 # this is for tracking particle filter speed
                 ips = 1.0 / (t2 - t1)
                 self.smoothing.append(ips)
-                # if self.iters % 10 == 0:
-                #     self.get_logger().info(str(['iters per sec:', int(self.timer.fps()), ' possible:', int(self.smoothing.mean())]))
+                if self.iters % 10 == 0:
+                    self.get_logger().info(str(['iters per sec:', int(self.timer.fps()), ' possible:', int(self.smoothing.mean())]))
 
                 self.visualize()
 
