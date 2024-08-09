@@ -412,7 +412,7 @@ class ParticleFiler(Node):
         self.downsampled_ranges = np.array(msg.ranges[:: self.ANGLE_STEP])
         self.last_stamp = msg.header.stamp
         self.lidar_initialized = True
-        # self.update()
+        self.update(msg.header.stamp)
 
     def odomCB(self, msg):
         """
@@ -747,7 +747,7 @@ class ParticleFiler(Node):
         # returns the expected value of the pose given the particle distribution
         return np.dot(self.particles.transpose(), self.weights)
 
-    def update(self):
+    def update(self, stamp):
         """
         Apply the MCL function to update particle filter state.
 
@@ -775,7 +775,7 @@ class ParticleFiler(Node):
                 t2 = time.time()
 
                 # publish transformation frame based on inferred pose
-                self.publish_tf(self.inferred_pose, self.last_stamp)
+                self.publish_tf(self.inferred_pose, stamp)
 
                 # this is for tracking particle filter speed
                 ips = 1.0 / (t2 - t1)
