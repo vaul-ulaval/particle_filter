@@ -223,6 +223,8 @@ class ParticleFiler(Node):
             self.range_method = range_libc.PyGiantLUTCast(oMap, self.MAX_RANGE_PX, self.THETA_DISCRETIZATION)
         self.get_logger().info("Done loading map")
 
+        self.get_logger().info("Done initializing range method")
+
         # 0: permissible, -1: unmapped, 100: blocked
         array_255 = np.array(map_msg.data).reshape((map_msg.info.height, map_msg.info.width))
 
@@ -351,7 +353,7 @@ class ParticleFiler(Node):
             # Publish the inferred pose for visualization
             ps = PoseStamped()
             ps.header.stamp = self.get_clock().now().to_msg()
-            ps.header.frame_id = "/map"
+            ps.header.frame_id = "map"
             ps.pose.position.x = self.inferred_pose[0]
             ps.pose.position.y = self.inferred_pose[1]
             ps.pose.orientation = Utils.angle_to_quaternion(self.inferred_pose[2])
@@ -379,15 +381,15 @@ class ParticleFiler(Node):
         # publish the given particles as a PoseArray object
         pa = PoseArray()
         pa.header.stamp = self.get_clock().now().to_msg()
-        pa.header.frame_id = "/map"
+        pa.header.frame_id = "map"
         pa.poses = Utils.particles_to_poses(particles)
         self.particle_pub.publish(pa)
 
     def publish_scan(self, angles, ranges):
-        # publish the given angels and ranges as a laser scan message
+        # publish the given angles and ranges as a laser scan message
         ls = LaserScan()
         ls.header.stamp = self.last_stamp
-        ls.header.frame_id = "/laser"
+        ls.header.frame_id = "laser"
         ls.angle_min = np.min(angles)
         ls.angle_max = np.max(angles)
         ls.angle_increment = np.abs(angles[0] - angles[1])
@@ -440,9 +442,6 @@ class ParticleFiler(Node):
         else:
             self.get_logger().info("...Received first Odometry message")
             self.last_pose = pose
-
-        # this topic is slower than lidar, so update every time we receive a message
-        # self.update()
 
     def clicked_pose(self, msg):
         """
