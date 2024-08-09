@@ -91,7 +91,7 @@ class ParticleFiler(Node):
         self.declare_parameter("motion_dispersion_theta")
         self.declare_parameter("scan_topic")
         self.declare_parameter("odometry_topic")
-        self.declare_parameter("publish_map_to_odom")
+        self.declare_parameter("publish_odom_to_map")
         self.declare_parameter("transform_tolerance")
 
         # parameters
@@ -106,7 +106,7 @@ class ParticleFiler(Node):
         self.SHOW_FINE_TIMING = self.get_parameter("fine_timing").value
         self.PUBLISH_ODOM = self.get_parameter("publish_odom").value
         self.DO_VIZ = self.get_parameter("viz").value
-        self.PUBLISH_MAP_TO_ODOM = self.get_parameter("publish_map_to_odom").value
+        self.PUBLISH_ODOM_TO_MAP = self.get_parameter("publish_odom_to_map").value
         self.TRANSFORM_TOLERANCE = self.get_parameter("transform_tolerance").value
 
         # sensor model constants
@@ -175,7 +175,7 @@ class ParticleFiler(Node):
         # these topics are for coordinate space things
         self.pub_tf = TransformBroadcaster(self)
 
-        if self.PUBLISH_MAP_TO_ODOM:
+        if self.PUBLISH_ODOM_TO_MAP:
             self.tf_buffer = Buffer()
             self.tf_listener = TransformListener(self.tf_buffer, self)
 
