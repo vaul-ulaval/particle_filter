@@ -31,8 +31,6 @@ import range_libc
 import rclpy
 
 # TF
-# import tf.transformations
-# import tf
 import tf2_ros
 import tf_transformations
 from geometry_msgs.msg import (
@@ -44,14 +42,12 @@ from geometry_msgs.msg import (
     TransformStamped,
 )
 from nav_msgs.msg import Odometry, OccupancyGrid
-from nav_msgs.srv import GetMap
 from particle_filter import utils as Utils
 from rclpy.node import Node
 from rclpy.qos import qos_profile_action_status_default
 
 # messages
 from sensor_msgs.msg import LaserScan
-from message_filters import Subscriber, ApproximateTimeSynchronizer
 from tf2_ros import TransformBroadcaster, TransformListener
 from tf2_ros.buffer import Buffer
 
@@ -184,11 +180,9 @@ class ParticleFiler(Node):
             self.tf_listener = TransformListener(self.tf_buffer, self)
 
         # these topics are to receive data from the racecar
-        self.scan_sub = Subscriber(self, LaserScan, self.get_parameter("scan_topic").value)
-        self.odom_sub = Subscriber(self, Odometry, self.get_parameter("odometry_topic").value)
-        self.ts = ApproximateTimeSynchronizer([self.scan_sub, self.odom_sub], queue_size=20, slop=0.02)
-        self.ts.registerCallback(self.laser_odom_callback)
-
+        self.scan_sub = self.create_subscription(LaserScan, self.get_parameter("scan_topic").value, self.lidarCB, 1)
+        self.odom_sub = self.create_subscription(Odometry, self.get_parameter("odometry_topic").value, self.odomCB, 1)
+        
         self.map_sub = self.create_subscription(OccupancyGrid, "/map", self.map_callback, qos_profile_action_status_default)
         self.pose_sub = self.create_subscription(PoseWithCovarianceStamped, "/initialpose", self.clicked_pose, 1)
         self.click_sub = self.create_subscription(PointStamped, "/clicked_point", self.clicked_pose, 1)
@@ -376,14 +370,6 @@ class ParticleFiler(Node):
         ls.range_max = np.max(ranges)
         ls.ranges = ranges
         self.pub_fake_scan.publish(ls)
-
-    def laser_odom_callback(self, laser_msg, odom_msg):
-        """
-        Callback for the synchronized laser and odometry messages.
-        """
-        self.lidarCB(laser_msg)
-        self.odomCB(odom_msg)
-        self.update()
 
     def lidarCB(self, msg):
         """
