@@ -169,15 +169,14 @@ class ParticleFiler(Node):
         self.pub_fake_scan = self.create_publisher(LaserScan, "/pf/viz/fake_scan", 1)
         self.rect_pub = self.create_publisher(PolygonStamped, "/pf/viz/poly1", 1)
 
-        if self.PUBLISH_ODOM:
-            self.odom_pub = self.create_publisher(Odometry, "/pf/pose/odom", 1)
-
-        # these topics are for coordinate space things
-        self.pub_tf = TransformBroadcaster(self)
+        self.tf_buffer = Buffer()
+        self.tf_listener = TransformListener(self.tf_buffer, self)
 
         if self.PUBLISH_ODOM_TO_MAP:
-            self.tf_buffer = Buffer()
-            self.tf_listener = TransformListener(self.tf_buffer, self)
+            self.pub_tf = TransformBroadcaster(self)
+
+        if self.PUBLISH_ODOM:
+            self.odom_pub = self.create_publisher(Odometry, "/pf/pose/odom", 1)
 
         # these topics are to receive data from the racecar
         qos = qos_profile_sensor_data
@@ -237,6 +236,7 @@ class ParticleFiler(Node):
         """Publish a tf for the car. This tells ROS where the car is with respect to the map."""
         if stamp == None:
             stamp = self.get_clock().now().to_msg()
+
         try:
             # Get laser -> odom transform
             laser_to_odom_tf = self.tf_buffer.lookup_transform("odom", "laser", rclpy.time.Time())
@@ -278,19 +278,20 @@ class ParticleFiler(Node):
         odom_to_map_rotation = tf_transformations.quaternion_from_matrix(
             odom_to_map_tf)
 
-
-        transform = TransformStamped()
-        transform.header.stamp = stamp
-        transform.header.frame_id = "map"
-        transform.child_frame_id = "odom"
-        transform.transform.translation.x = odom_to_map_pos[0]
-        transform.transform.translation.y = odom_to_map_pos[1]
-        transform.transform.translation.z = odom_to_map_pos[2]
-        transform.transform.rotation.x = odom_to_map_rotation[0]
-        transform.transform.rotation.y = odom_to_map_rotation[1]
-        transform.transform.rotation.z = odom_to_map_rotation[2]
-        transform.transform.rotation.w = odom_to_map_rotation[3]
-        self.pub_tf.sendTransform(transform)
+        # Publish the odom -> transform
+        if self.PUBLISH_ODOM_TO_MAP:
+            transform = TransformStamped()
+            transform.header.stamp = stamp
+            transform.header.frame_id = "map"
+            transform.child_frame_id = "odom"
+            transform.transform.translation.x = odom_to_map_pos[0]
+            transform.transform.translation.y = odom_to_map_pos[1]
+            transform.transform.translation.z = odom_to_map_pos[2]
+            transform.transform.rotation.x = odom_to_map_rotation[0]
+            transform.transform.rotation.y = odom_to_map_rotation[1]
+            transform.transform.rotation.z = odom_to_map_rotation[2]
+            transform.transform.rotation.w = odom_to_map_rotation[3]
+            self.pub_tf.sendTransform(transform)
 
         # Also publish odometry to facilitate getting the localization pose
         if self.PUBLISH_ODOM:
