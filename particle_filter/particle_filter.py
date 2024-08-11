@@ -44,7 +44,7 @@ from geometry_msgs.msg import (
 from nav_msgs.msg import Odometry, OccupancyGrid
 from particle_filter import utils as Utils
 from rclpy.node import Node
-from rclpy.qos import qos_profile_action_status_default
+from rclpy.qos import qos_profile_action_status_default, qos_profile_sensor_data
 
 # messages
 from sensor_msgs.msg import LaserScan
@@ -180,9 +180,10 @@ class ParticleFiler(Node):
             self.tf_listener = TransformListener(self.tf_buffer, self)
 
         # these topics are to receive data from the racecar
-        self.scan_sub = self.create_subscription(LaserScan, self.get_parameter("scan_topic").value, self.lidarCB, 1)
-        self.odom_sub = self.create_subscription(Odometry, self.get_parameter("odometry_topic").value, self.odomCB, 1)
-        
+        qos = qos_profile_sensor_data
+        qos.depth = 1
+        self.scan_sub = self.create_subscription(LaserScan, self.get_parameter("scan_topic").value, self.lidarCB, qos)
+        self.odom_sub = self.create_subscription(Odometry, self.get_parameter("odometry_topic").value, self.odomCB, qos)
         self.map_sub = self.create_subscription(OccupancyGrid, "/map", self.map_callback, qos_profile_action_status_default)
         self.pose_sub = self.create_subscription(PoseWithCovarianceStamped, "/initialpose", self.clicked_pose, 1)
         self.click_sub = self.create_subscription(PointStamped, "/clicked_point", self.clicked_pose, 1)
