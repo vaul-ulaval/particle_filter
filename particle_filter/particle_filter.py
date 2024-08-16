@@ -417,6 +417,7 @@ class ParticleFiler(Node):
             self.downsampled_angles = np.copy(self.laser_angles[0 :: self.ANGLE_STEP]).astype(np.float32)
             self.viz_queries = np.zeros((self.downsampled_angles.shape[0], 3), dtype=np.float32)
             self.viz_ranges = np.zeros(self.downsampled_angles.shape[0], dtype=np.float32)
+            self.get_logger().info(f"Downsampled LiDAR angles count: {self.downsampled_angles.shape[0]}")
 
         # store the necessary scanner information for later processing
         self.downsampled_ranges = np.array(msg.ranges[:: self.ANGLE_STEP])
