@@ -48,6 +48,7 @@ from rclpy.qos import qos_profile_action_status_default, qos_profile_sensor_data
 
 # messages
 from sensor_msgs.msg import LaserScan
+from message_filters import Subscriber, ApproximateTimeSynchronizer
 from tf2_ros import TransformBroadcaster, TransformListener
 from tf2_ros.buffer import Buffer
 
@@ -181,8 +182,11 @@ class ParticleFiler(Node):
         # these topics are to receive data from the racecar
         qos = qos_profile_sensor_data
         qos.depth = 1
-        self.scan_sub = self.create_subscription(LaserScan, self.get_parameter("scan_topic").value, self.lidarCB, qos)
-        self.odom_sub = self.create_subscription(Odometry, self.get_parameter("odometry_topic").value, self.odomCB, qos)
+        self.scan_sub = Subscriber(self, LaserScan, self.get_parameter("scan_topic").value, qos_profile=qos)
+        self.odom_sub = Subscriber(self, Odometry, self.get_parameter("odometry_topic").value)
+        self.ts = ApproximateTimeSynchronizer([self.scan_sub, self.odom_sub], queue_size=10, slop=0.025)
+        self.ts.registerCallback(self.laser_odom_callback)
+
         self.map_sub = self.create_subscription(OccupancyGrid, "/map", self.map_callback, qos_profile_action_status_default)
         self.pose_sub = self.create_subscription(PoseWithCovarianceStamped, "/initialpose", self.clicked_pose, 1)
         self.click_sub = self.create_subscription(PointStamped, "/clicked_point", self.clicked_pose, 1)
@@ -413,13 +417,11 @@ class ParticleFiler(Node):
             self.downsampled_angles = np.copy(self.laser_angles[0 :: self.ANGLE_STEP]).astype(np.float32)
             self.viz_queries = np.zeros((self.downsampled_angles.shape[0], 3), dtype=np.float32)
             self.viz_ranges = np.zeros(self.downsampled_angles.shape[0], dtype=np.float32)
-            self.get_logger().info(str(self.downsampled_angles.shape[0]))
 
         # store the necessary scanner information for later processing
         self.downsampled_ranges = np.array(msg.ranges[:: self.ANGLE_STEP])
         self.last_stamp = msg.header.stamp
         self.lidar_initialized = True
-        self.update(msg.header.stamp)
 
     def odomCB(self, msg):
         """
@@ -442,11 +444,18 @@ class ParticleFiler(Node):
 
             self.odometry_data = np.array([local_delta[0, 0], local_delta[0, 1], orientation - self.last_pose[2]])
             self.last_pose = pose
-            # self.last_stamp = msg.header.stamp
             self.odom_initialized = True
         else:
             self.get_logger().info("...Received first Odometry message")
             self.last_pose = pose
+
+    def laser_odom_callback(self, laser_msg, odom_msg):
+        """
+        Callback for the synchronized laser and odometry messages.
+        """
+        self.lidarCB(laser_msg)
+        self.odomCB(odom_msg)
+        self.update(odom_msg.header.stamp)
 
     def clicked_pose(self, msg):
         """
