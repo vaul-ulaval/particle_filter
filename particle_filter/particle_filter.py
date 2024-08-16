@@ -238,55 +238,51 @@ class ParticleFiler(Node):
             stamp = self.get_clock().now().to_msg()
 
         try:
-            # Get laser -> odom transform
-            laser_to_odom_tf = self.tf_buffer.lookup_transform("odom", "laser", rclpy.time.Time())
+            # Get odom -> laser transform
+            odom_to_laser_tf = self.tf_buffer.lookup_transform("laser", "odom", tf2_ros.Time())
         except tf2_ros.TransformException as e:
-            self.get_logger().info("Could not get laser -> odom transform: " + str(e))
+            self.get_logger().warn("Could not get odom -> laser transform: " + str(e))
             return
 
-        laser_to_odom_pos = np.array(
+        odom_to_laser_pos = np.array(
             [
-                laser_to_odom_tf.transform.translation.x,
-                laser_to_odom_tf.transform.translation.y,
-                laser_to_odom_tf.transform.translation.z,
+                odom_to_laser_tf.transform.translation.x,
+                odom_to_laser_tf.transform.translation.y,
+                odom_to_laser_tf.transform.translation.z,
             ]
         )
-        laser_to_odom_quat = np.array(
+        odom_to_laser_quat = np.array(
             [
-                laser_to_odom_tf.transform.rotation.x,
-                laser_to_odom_tf.transform.rotation.y,
-                laser_to_odom_tf.transform.rotation.z,
-                laser_to_odom_tf.transform.rotation.w,
+                odom_to_laser_tf.transform.rotation.x,
+                odom_to_laser_tf.transform.rotation.y,
+                odom_to_laser_tf.transform.rotation.z,
+                odom_to_laser_tf.transform.rotation.w,
             ]
         )
-        laser_to_odom_tf = tf_transformations.quaternion_matrix(
-            laser_to_odom_quat)
-        laser_to_odom_tf[:3, 3] = laser_to_odom_pos
+        odom_to_laser_tf = tf_transformations.quaternion_matrix(odom_to_laser_quat)
+        odom_to_laser_tf[:3, 3] = odom_to_laser_pos
 
         # Get laser -> map transform
         laser_to_map_pos = np.array((pose[0], pose[1], 0))
-        laser_to_map_quat = tf_transformations.quaternion_from_euler(
-            0, 0, pose[2])
-        laser_to_map_tf = tf_transformations.quaternion_matrix(
-            laser_to_map_quat)
+        laser_to_map_quat = tf_transformations.quaternion_from_euler(0, 0, pose[2])
+        laser_to_map_tf = tf_transformations.quaternion_matrix(laser_to_map_quat)
         laser_to_map_tf[:3, 3] = laser_to_map_pos
 
         # Apply laser -> map transform to odom -> laser transform
         # This gives a odom -> map transform
-        odom_to_map_tf = laser_to_map_tf@np.linalg.inv(laser_to_odom_tf)
-        odom_to_map_pos = odom_to_map_tf[:3, 3]
-        odom_to_map_rotation = tf_transformations.quaternion_from_matrix(
-            odom_to_map_tf)
+        odom_to_map_tf = laser_to_map_tf@odom_to_laser_tf
+        odom_to_map_translation = odom_to_map_tf[:3, 3]
+        odom_to_map_rotation = tf_transformations.quaternion_from_matrix(odom_to_map_tf)
 
-        # Publish the odom -> transform
+        # Publish the odom -> map transform
         if self.PUBLISH_ODOM_TO_MAP:
             transform = TransformStamped()
             transform.header.stamp = stamp
             transform.header.frame_id = "map"
             transform.child_frame_id = "odom"
-            transform.transform.translation.x = odom_to_map_pos[0]
-            transform.transform.translation.y = odom_to_map_pos[1]
-            transform.transform.translation.z = odom_to_map_pos[2]
+            transform.transform.translation.x = odom_to_map_translation[0]
+            transform.transform.translation.y = odom_to_map_translation[1]
+            transform.transform.translation.z = odom_to_map_translation[2]
             transform.transform.rotation.x = odom_to_map_rotation[0]
             transform.transform.rotation.y = odom_to_map_rotation[1]
             transform.transform.rotation.z = odom_to_map_rotation[2]
@@ -296,36 +292,35 @@ class ParticleFiler(Node):
         # Also publish odometry to facilitate getting the localization pose
         if self.PUBLISH_ODOM:
             try:
-                # Get laser -> base_link transform.
-                laser_to_base_link_tf = self.tf_buffer.lookup_transform(
-                    "base_link", "laser", rclpy.time.Time())
+                # Get base_link -> laser transform.
+                base_link_to_laser_tf = self.tf_buffer.lookup_transform("laser", "base_link", tf2_ros.Time())
             except tf2_ros.TransformException as e:
-                self.get_logger().info("Could not get laser -> base_link transform: " + str(e))
+                self.get_logger().warn("Could not get base_link -> laser transform: " + str(e))
                 return
 
-            laser_to_base_link_translation = np.array(
+            base_link_to_laser_translation = np.array(
                 [
-                    laser_to_base_link_tf.transform.translation.x,
-                    laser_to_base_link_tf.transform.translation.y,
-                    laser_to_base_link_tf.transform.translation.z,
+                    base_link_to_laser_tf.transform.translation.x,
+                    base_link_to_laser_tf.transform.translation.y,
+                    base_link_to_laser_tf.transform.translation.z,
                 ]
             )
-            laser_to_base_link_rotation = np.array(
+            base_link_to_laser_rotation = np.array(
                 [
-                    laser_to_base_link_tf.transform.rotation.x,
-                    laser_to_base_link_tf.transform.rotation.y,
-                    laser_to_base_link_tf.transform.rotation.z,
-                    laser_to_base_link_tf.transform.rotation.w,
+                    base_link_to_laser_tf.transform.rotation.x,
+                    base_link_to_laser_tf.transform.rotation.y,
+                    base_link_to_laser_tf.transform.rotation.z,
+                    base_link_to_laser_tf.transform.rotation.w,
                 ]
             )
-            laser_to_base_link_matrix = tf_transformations.quaternion_matrix(
-                laser_to_base_link_rotation)
-            laser_to_base_link_matrix[:3, 3] = laser_to_base_link_translation
+            base_link_to_laser_tf = tf_transformations.quaternion_matrix(base_link_to_laser_rotation)
+            base_link_to_laser_tf[:3, 3] = base_link_to_laser_translation
 
-            base_link_to_map_tf = laser_to_map_tf@np.linalg.inv(laser_to_base_link_matrix)
+            # Apply laser -> map transform to odom -> laser transform
+            # This gives a odom -> map transform
+            base_link_to_map_tf = laser_to_map_tf@base_link_to_laser_tf
             base_link_to_map_translation = base_link_to_map_tf[:3, 3]
-            base_link_to_map_rotation = tf_transformations.quaternion_from_matrix(
-                base_link_to_map_tf)
+            base_link_to_map_rotation = tf_transformations.quaternion_from_matrix(base_link_to_map_tf)
 
             odom = Odometry()
             odom.header.stamp = stamp
