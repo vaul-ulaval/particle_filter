@@ -237,6 +237,10 @@ class ParticleFiler(Node):
         if stamp == None:
             stamp = self.get_clock().now().to_msg()
 
+        if (not self.tf_buffer.can_transform("laser", "odom", tf2_ros.Time())):
+            self.get_logger().warn("Could not get odom -> laser transform")
+            return
+
         try:
             # Get odom -> laser transform
             odom_to_laser_tf = self.tf_buffer.lookup_transform("laser", "odom", tf2_ros.Time())
@@ -291,6 +295,10 @@ class ParticleFiler(Node):
 
         # Also publish odometry to facilitate getting the localization pose
         if self.PUBLISH_ODOM:
+            if (not self.tf_buffer.can_transform("laser", "base_link", tf2_ros.Time())):
+                self.get_logger().warn("Could not get base_link -> laser transform")
+                return
+
             try:
                 # Get base_link -> laser transform.
                 base_link_to_laser_tf = self.tf_buffer.lookup_transform("laser", "base_link", tf2_ros.Time())
