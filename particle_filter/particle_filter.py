@@ -280,7 +280,11 @@ class ParticleFiler(Node):
         # This gives a odom -> map transform
         odom_to_map_tf = laser_to_map_tf@odom_to_laser_tf
         odom_to_map_translation = odom_to_map_tf[:3, 3]
-        odom_to_map_rotation = tf_transformations.quaternion_from_matrix(odom_to_map_tf)
+        try:
+            odom_to_map_rotation = tf_transformations.quaternion_from_matrix(odom_to_map_tf)
+        except np.linalg.LinAlgError as e:
+            self.get_logger().warn(f'Failed to convert rotation matrix to quaternion: {e}')
+            return
 
         # Publish the odom -> map transform
         if self.PUBLISH_ODOM_TO_MAP:
@@ -332,7 +336,11 @@ class ParticleFiler(Node):
             # This gives a odom -> map transform
             base_link_to_map_tf = laser_to_map_tf@base_link_to_laser_tf
             base_link_to_map_translation = base_link_to_map_tf[:3, 3]
-            base_link_to_map_rotation = tf_transformations.quaternion_from_matrix(base_link_to_map_tf)
+            try:
+                base_link_to_map_rotation = tf_transformations.quaternion_from_matrix(base_link_to_map_tf)
+            except np.linalg.LinAlgError as e:
+                self.get_logger().warn(f'Failed to convert rotation matrix to quaternion: {e}')
+                return
 
             odom = Odometry()
             odom.header.stamp = stamp
