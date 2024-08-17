@@ -379,10 +379,10 @@ class ParticleFiler(Node):
         if self.particle_pub.get_subscription_count() > 0:
             # publish a downsampled version of the particle distribution to avoid a lot of latency
             if self.MAX_PARTICLES > self.MAX_VIZ_PARTICLES:
-                # randomly downsample particles
-                proposal_indices = np.random.choice(self.particle_indices, self.MAX_VIZ_PARTICLES, p=self.weights)
-                # proposal_indices = np.random.choice(self.particle_indices, self.MAX_VIZ_PARTICLES)
-                self.publish_particles(self.particles[proposal_indices, :])
+                if not np.any(np.isnan(self.weights)):
+                    # randomly downsample particles
+                    proposal_indices = np.random.choice(self.particle_indices, self.MAX_VIZ_PARTICLES, p=self.weights)
+                    self.publish_particles(self.particles[proposal_indices, :])
             else:
                 self.publish_particles(self.particles)
 
@@ -724,6 +724,12 @@ class ParticleFiler(Node):
         """
         if self.SHOW_FINE_TIMING:
             t = time.time()
+
+        weights_nan_count = np.sum(np.isnan(self.weights))
+        if weights_nan_count > 0:
+            self.get_logger().warn(f'Weights contains NaN values. Reinitializing to uniform weights.')
+            self.weights = np.ones(self.MAX_PARTICLES) / float(self.MAX_PARTICLES)
+
         # draw the proposal distribution from the old particles
         proposal_indices = np.random.choice(self.particle_indices, self.MAX_PARTICLES, p=self.weights)
         proposal_distribution = self.particles[proposal_indices, :]
