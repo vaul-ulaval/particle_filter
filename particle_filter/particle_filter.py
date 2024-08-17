@@ -150,6 +150,7 @@ class ParticleFiler(Node):
         self.sensor_model_table = None
 
         # particle poses and weights
+        self.rng = np.random.default_rng()
         self.inferred_pose = None
         self.particle_indices = np.arange(self.MAX_PARTICLES)
         self.particles = np.zeros((self.MAX_PARTICLES, 3))
@@ -379,10 +380,9 @@ class ParticleFiler(Node):
         if self.particle_pub.get_subscription_count() > 0:
             # publish a downsampled version of the particle distribution to avoid a lot of latency
             if self.MAX_PARTICLES > self.MAX_VIZ_PARTICLES:
-                if not np.any(np.isnan(self.weights)):
-                    # randomly downsample particles
-                    proposal_indices = np.random.choice(self.particle_indices, self.MAX_VIZ_PARTICLES, p=self.weights)
-                    self.publish_particles(self.particles[proposal_indices, :])
+                # randomly downsample particles
+                proposal_indices = self.rng.choice(self.particle_indices, self.MAX_VIZ_PARTICLES, p=self.weights, shuffle=False)
+                self.publish_particles(self.particles[proposal_indices, :])
             else:
                 self.publish_particles(self.particles)
 
@@ -483,9 +483,9 @@ class ParticleFiler(Node):
         self.get_logger().info(str([pose.position.x, pose.position.y]))
         self.state_lock.acquire()
         self.weights = np.ones(self.MAX_PARTICLES) / float(self.MAX_PARTICLES)
-        self.particles[:, 0] = pose.position.x + np.random.normal(loc=0.0, scale=0.5, size=self.MAX_PARTICLES)
-        self.particles[:, 1] = pose.position.y + np.random.normal(loc=0.0, scale=0.5, size=self.MAX_PARTICLES)
-        self.particles[:, 2] = Utils.quaternion_to_angle(pose.orientation) + np.random.normal(
+        self.particles[:, 0] = pose.position.x + self.rng.normal(loc=0.0, scale=0.5, size=self.MAX_PARTICLES)
+        self.particles[:, 1] = pose.position.y + self.rng.normal(loc=0.0, scale=0.5, size=self.MAX_PARTICLES)
+        self.particles[:, 2] = Utils.quaternion_to_angle(pose.orientation) + self.rng.normal(
             loc=0.0, scale=0.4, size=self.MAX_PARTICLES
         )
         self.state_lock.release()
@@ -498,12 +498,12 @@ class ParticleFiler(Node):
         # randomize over grid coordinate space
         self.state_lock.acquire()
         permissible_x, permissible_y = np.where(self.permissible_region == 1)
-        indices = np.random.randint(0, len(permissible_x), size=self.MAX_PARTICLES)
+        indices = self.rng.integers(0, len(permissible_x), size=self.MAX_PARTICLES)
 
         permissible_states = np.zeros((self.MAX_PARTICLES, 3))
         permissible_states[:, 0] = permissible_y[indices]
         permissible_states[:, 1] = permissible_x[indices]
-        permissible_states[:, 2] = np.random.random(self.MAX_PARTICLES) * np.pi * 2.0
+        permissible_states[:, 2] = self.rng.random(self.MAX_PARTICLES) * np.pi * 2.0
 
         Utils.map_to_world(permissible_states, self.map_info)
         self.particles = permissible_states
@@ -586,9 +586,9 @@ class ParticleFiler(Node):
         self.local_deltas[:, 2] = action[2]
 
         proposal_dist[:, :] += self.local_deltas
-        proposal_dist[:, 0] += np.random.normal(loc=0.0, scale=self.MOTION_DISPERSION_X, size=self.MAX_PARTICLES)
-        proposal_dist[:, 1] += np.random.normal(loc=0.0, scale=self.MOTION_DISPERSION_Y, size=self.MAX_PARTICLES)
-        proposal_dist[:, 2] += np.random.normal(loc=0.0, scale=self.MOTION_DISPERSION_THETA, size=self.MAX_PARTICLES)
+        proposal_dist[:, 0] += self.rng.normal(loc=0.0, scale=self.MOTION_DISPERSION_X, size=self.MAX_PARTICLES)
+        proposal_dist[:, 1] += self.rng.normal(loc=0.0, scale=self.MOTION_DISPERSION_Y, size=self.MAX_PARTICLES)
+        proposal_dist[:, 2] += self.rng.normal(loc=0.0, scale=self.MOTION_DISPERSION_THETA, size=self.MAX_PARTICLES)
 
     def sensor_model(self, proposal_dist, obs, weights):
         """
@@ -725,13 +725,8 @@ class ParticleFiler(Node):
         if self.SHOW_FINE_TIMING:
             t = time.time()
 
-        weights_nan_count = np.sum(np.isnan(self.weights))
-        if weights_nan_count > 0:
-            self.get_logger().warn(f'Weights contains NaN values. Reinitializing to uniform weights.')
-            self.weights = np.ones(self.MAX_PARTICLES) / float(self.MAX_PARTICLES)
-
         # draw the proposal distribution from the old particles
-        proposal_indices = np.random.choice(self.particle_indices, self.MAX_PARTICLES, p=self.weights)
+        proposal_indices = self.rng.choice(self.particle_indices, self.MAX_PARTICLES, p=self.weights, shuffle=False)
         proposal_distribution = self.particles[proposal_indices, :]
         if self.SHOW_FINE_TIMING:
             t_propose = time.time()
