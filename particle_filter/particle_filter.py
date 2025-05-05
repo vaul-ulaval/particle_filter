@@ -74,29 +74,28 @@ class ParticleFiler(Node):
         super().__init__("particle_filter")
 
         # declare parameters
-        self.declare_parameter("angle_step")
-        self.declare_parameter("max_particles")
-        self.declare_parameter("max_viz_particles")
-        self.declare_parameter("squash_factor")
-        self.declare_parameter("max_range")
-        self.declare_parameter("theta_discretization")
-        self.declare_parameter("range_method")
-        self.declare_parameter("rangelib_variant")
-        self.declare_parameter("fine_timing")
-        self.declare_parameter("publish_odom")
-        self.declare_parameter("viz")
-        self.declare_parameter("z_short")
-        self.declare_parameter("z_max")
-        self.declare_parameter("z_rand")
-        self.declare_parameter("z_hit")
-        self.declare_parameter("sigma_hit")
-        self.declare_parameter("motion_dispersion_x")
-        self.declare_parameter("motion_dispersion_y")
-        self.declare_parameter("motion_dispersion_theta")
-        self.declare_parameter("scan_topic")
-        self.declare_parameter("odometry_topic")
-        self.declare_parameter("publish_map_to_odom")
-        self.declare_parameter("transform_tolerance")
+        self.declare_parameter("angle_step", 18)
+        self.declare_parameter("max_particles", 2000)
+        self.declare_parameter("max_viz_particles", 60)
+        self.declare_parameter("squash_factor", 2.2)
+        self.declare_parameter("max_range", 10.0)
+        self.declare_parameter("theta_discretization", 112.0)
+        self.declare_parameter("range_method", "rmgpu")
+        self.declare_parameter("rangelib_variant", 2)
+        self.declare_parameter("fine_timing", 0)
+        self.declare_parameter("publish_odom", 1)
+        self.declare_parameter("viz", 1)
+        self.declare_parameter("z_short", 0.01)
+        self.declare_parameter("z_max", 0.07)
+        self.declare_parameter("z_rand", 0.12)
+        self.declare_parameter("z_hit", 0.75)
+        self.declare_parameter("sigma_hit", 8.0)
+        self.declare_parameter("motion_dispersion_x", 0.05)
+        self.declare_parameter("motion_dispersion_y", 0.025)
+        self.declare_parameter("motion_dispersion_theta", 0.25)
+        self.declare_parameter("scan_topic", "/scan")
+        self.declare_parameter("odometry_topic", "/odom")
+        self.declare_parameter("publish_map_to_odom", True)
 
         # parameters
         self.ANGLE_STEP = self.get_parameter("angle_step").value
@@ -111,7 +110,6 @@ class ParticleFiler(Node):
         self.PUBLISH_ODOM = self.get_parameter("publish_odom").value
         self.DO_VIZ = self.get_parameter("viz").value
         self.PUBLISH_MAP_TO_ODOM = self.get_parameter("publish_map_to_odom").value
-        self.TRANSFORM_TOLERANCE = self.get_parameter("transform_tolerance").value
 
         # sensor model constants
         self.Z_SHORT = self.get_parameter("z_short").value
