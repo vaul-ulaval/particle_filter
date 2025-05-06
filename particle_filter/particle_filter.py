@@ -101,7 +101,7 @@ class ParticleFiler(Node):
         self.ANGLE_STEP = self.get_parameter("angle_step").value
         self.MAX_PARTICLES = self.get_parameter("max_particles").value
         self.MAX_VIZ_PARTICLES = self.get_parameter("max_viz_particles").value
-        self.INV_SQUASH_FACTOR = 1.0 / self.get_parameter("squash_factor").value
+        self.INV_SQUASH_FACTOR = 1.0 / self.get_parameter("squash_factor").get_parameter_value().double_value
         self.MAX_RANGE_METERS = self.get_parameter("max_range").value
         self.THETA_DISCRETIZATION = self.get_parameter("theta_discretization").value
         self.WHICH_RM = self.get_parameter("range_method").value
@@ -157,7 +157,6 @@ class ParticleFiler(Node):
         self.weights = np.ones(self.MAX_PARTICLES) / float(self.MAX_PARTICLES)
 
         # initialize the state
-        self.smoothing = Utils.CircularArray(10)
         self.timer = Utils.Timer(10)
 
         # keep track of speed from input odom
@@ -765,8 +764,6 @@ class ParticleFiler(Node):
                 self.publish_tf(self.inferred_pose, self.last_stamp)
 
                 # this is for tracking particle filter speed
-                ips = 1.0 / (t2 - t1)
-                self.smoothing.append(ips)
                 # if self.iters % 10 == 0:
                 #     self.get_logger().info(str(['iters per sec:', int(self.timer.fps()), ' possible:', int(self.smoothing.mean())]))
 
