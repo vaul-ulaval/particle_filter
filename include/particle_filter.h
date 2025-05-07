@@ -15,6 +15,7 @@
 #include <message_filters/subscriber.h>
 #include <message_filters/sync_policies/approximate_time.h>
 #include <message_filters/synchronizer.h>
+#include <tf2_ros/buffer.h>
 
 
 #include <chrono>
@@ -118,6 +119,7 @@ class ParticleFilter : public rclcpp::Node {
     rclcpp::Subscription<nav_msgs::msg::OccupancyGrid>::SharedPtr map_sub_;
 
     std::unique_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
+    std::unique_ptr<tf2_ros::Buffer> tf_buffer_;
 
     // Data containers used in MCL algorithm
     double max_range_px_;

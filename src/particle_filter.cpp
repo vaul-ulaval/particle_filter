@@ -1,4 +1,7 @@
 #include "particle_filter.h"
+#include <tf2/LinearMath/Matrix3x3.hpp>
+#include <tf2/LinearMath/Quaternion.hpp>
+#include <tf2/time.hpp>
 
 ParticleFilter::ParticleFilter()
     : Node("particle_filter"), map_initialized_(false), odom_initialized_(false), lidar_initialized_(false), sensor_model_calc_worst_time_(0.0), motion_model_calc_worst_time_(0.0) {
@@ -154,6 +157,8 @@ void ParticleFilter::initializeParticlesPose(const geometry_msgs::msg::PoseWithC
 void ParticleFilter::setupROS() {
     // Initialize TF broadcaster
     tf_broadcaster_ = std::make_unique<tf2_ros::TransformBroadcaster>(this);
+    tf_buffer_ = std::make_unique<tf2_ros::Buffer>(this->get_clock());
+
 
     // Set up publishers
     pose_pub_ = create_publisher<geometry_msgs::msg::PoseStamped>("/pf/viz/inferred_pose", 1);
@@ -351,42 +356,67 @@ void ParticleFilter::expectedPose() {
 }
 
 void ParticleFilter::publishTfOdom() {
-    // Publish tf
-    // Transform position of LiDAR to base_link
-    double laser_base_link_offset = 0.265;  // for f1tenth_gym, it might be something like: 0.275 - 0.3302/2
-    double tf_base_link_to_map_x = expected_pose_.x - laser_base_link_offset * cos(expected_pose_.theta);
-    double tf_base_link_to_map_y = expected_pose_.y - laser_base_link_offset * sin(expected_pose_.theta);
+    rclcpp::Time stamp = get_clock()->now();
 
-    // Set up transform msg for tf2 in ROS 2
-    geometry_msgs::msg::TransformStamped transform_stamped;
-    transform_stamped.header.stamp = last_stamp_;
-    transform_stamped.header.frame_id = "map";
-    transform_stamped.child_frame_id = "base_link";
-    transform_stamped.transform.translation.x = tf_base_link_to_map_x;
-    transform_stamped.transform.translation.y = tf_base_link_to_map_y;
-    transform_stamped.transform.translation.z = 0.0;
+    tf2::Quaternion map_laser_rotation;
+    map_laser_rotation.setRPY(0, 0, expected_pose_.theta);
 
-    tf2::Quaternion q;
-    q.setRPY(0, 0, expected_pose_.theta);
-    transform_stamped.transform.rotation = tf2::toMsg(q);
+    geometry_msgs::msg::TransformStamped laser_to_odom;
+    try {
+        laser_to_odom = tf_buffer_->lookupTransform("laser", "odom", tf2::TimePointZero);
+    } catch (const tf2::TransformException &ex) {
+        RCLCPP_WARN(get_logger(), "Could not transform laser to odom: %s", ex.what());
+        return;
+    }
 
-    // Broadcast transform
-    tf_broadcaster_->sendTransform(transform_stamped);
+    
+    tf2::Matrix3x3 map_laser_matrix = tf2::Matrix3x3(map_laser_rotation);
+    map_laser_matrix[0][3] = expected_pose_.x;
+    map_laser_matrix[1][3] = expected_pose_.y;
+    map_laser_matrix[2][3] = 0.0;
+
+
+    tf2::Quaternion laser_odom_quaternion = tf2::Quaternion(
+        laser_to_odom.transform.rotation.x,
+        laser_to_odom.transform.rotation.y,
+        laser_to_odom.transform.rotation.z,
+        laser_to_odom.transform.rotation.w
+    );
+    tf2::Matrix3x3 laser_odom_matrix = tf2::Matrix3x3(laser_odom_quaternion);
+    laser_odom_matrix[0][3] = laser_to_odom.transform.translation.x;
+    laser_odom_matrix[1][3] = laser_to_odom.transform.translation.y;
+    laser_odom_matrix[2][3] = laser_to_odom.transform.translation.z;
+
+
+    tf2::Matrix3x3 map_odom_matrix = laser_odom_matrix * map_laser_matrix;
+
+    tf2::Quaternion map_odom_rotation;
+    map_odom_matrix.getRotation(map_odom_rotation);
+
+    auto t_map_odom = geometry_msgs::msg::TransformStamped();
+    t_map_odom.header.stamp = stamp;
+    t_map_odom.header.frame_id = "map";
+    t_map_odom.child_frame_id = "odom";
+    t_map_odom.transform.translation.x = map_odom_matrix[0][3];
+    t_map_odom.transform.translation.y = map_odom_matrix[1][3];
+    t_map_odom.transform.translation.z = map_odom_matrix[2][3];
+    t_map_odom.transform.rotation.x = map_odom_rotation[0];
+    t_map_odom.transform.rotation.y = map_odom_rotation[1];
+    t_map_odom.transform.rotation.z = map_odom_rotation[2];
+    t_map_odom.transform.rotation.w = map_odom_rotation[3];
+    tf_broadcaster_->sendTransform(t_map_odom);
 
     if (publish_odom_) {
-        // Create quaternion for orientation
-        geometry_msgs::msg::Quaternion q_msg = tf2::toMsg(q);
-
-        // Publish odom
         auto odom = std::make_unique<nav_msgs::msg::Odometry>();
         odom->header.stamp = last_stamp_;
         odom->header.frame_id = "map";
         odom->pose.pose.position.x = expected_pose_.x;
         odom->pose.pose.position.y = expected_pose_.y;
-        odom->pose.pose.orientation = q_msg;
+        odom->pose.pose.orientation = tf2::toMsg(map_laser_rotation);
         odom_pub_->publish(std::move(odom));
     }
 }
+
 
 void ParticleFilter::visualize() {
     if (!viz_) return;
