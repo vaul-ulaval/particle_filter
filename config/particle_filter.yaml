@@ -1,0 +1,29 @@
+particle_filter:
+  ros__parameters:
+    scan_topic: "/scan"
+    odometry_topic: "/odometry/filtered"
+    angle_step: 18
+    max_particles: 2000
+    max_viz_particles: 60
+    range_method: "rmgpu"
+    squash_factor: 2.2
+    theta_discretization: 112.0
+    max_range: 25.0
+    viz: 1
+    fine_timing: 0
+    publish_odom: 1
+    publish_map_to_odom: false
+
+    # Sensor model constants
+    z_short: 0.01
+    z_max: 0.07
+    z_rand: 0.12
+    z_hit: 0.75
+    sigma_hit: 8.0
+
+    # Motion model dispersion
+    motion_dispersion_x: 0.05
+    motion_dispersion_y: 0.025
+    motion_dispersion_theta: 0.25
+
+    rangelib_variant: 2
