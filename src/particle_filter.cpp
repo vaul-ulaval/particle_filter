@@ -163,7 +163,7 @@ void ParticleFilter::setupROS() {
 
     // Set up publishers
     pose_pub_ = create_publisher<geometry_msgs::msg::PoseStamped>("/pf/viz/inferred_pose", 1);
-    odom_pub_ = create_publisher<nav_msgs::msg::Odometry>("/pf_cpp", 1);
+    odom_pub_ = create_publisher<nav_msgs::msg::Odometry>("/pf/pose/odom", 1);
     particle_pub_ = create_publisher<geometry_msgs::msg::PoseArray>("/pf/viz/particles", 1);
     fake_scan_pub_ = create_publisher<sensor_msgs::msg::LaserScan>("/pf/viz/fake_scan", 1);
 
