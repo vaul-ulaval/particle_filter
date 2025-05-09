@@ -168,22 +168,13 @@ void ParticleFilter::setupROS() {
     fake_scan_pub_ = create_publisher<sensor_msgs::msg::LaserScan>("/pf/viz/fake_scan", 1);
 
     // Set up subscribers
-    odom_sub_.subscribe(this, odometry_topic_);
-    laser_sub_.subscribe(this, scan_topic_);
-
-    laser_odom_ts_ = std::make_shared<message_filters::Synchronizer<message_filters::sync_policies::ApproximateTime<sensor_msgs::msg::LaserScan, nav_msgs::msg::Odometry>>>(message_filters::sync_policies::ApproximateTime<sensor_msgs::msg::LaserScan, nav_msgs::msg::Odometry>(20), laser_sub_, odom_sub_);
-    laser_odom_ts_->setMaxIntervalDuration(rclcpp::Duration::from_seconds(0.02));
-    laser_odom_ts_->registerCallback(std::bind(&ParticleFilter::laser_odom_cb, this, std::placeholders::_1, std::placeholders::_2));
+    odom_sub_ = create_subscription<nav_msgs::msg::Odometry>(odometry_topic_, 10, std::bind(&ParticleFilter::odom_cb, this, std::placeholders::_1));
+    laser_sub_ = create_subscription<sensor_msgs::msg::LaserScan>(scan_topic_, 10, std::bind(&ParticleFilter::lidar_cb, this, std::placeholders::_1));
+    // TODO: lidar sub should be reliable?
 
     pose_sub_ = create_subscription<geometry_msgs::msg::PoseWithCovarianceStamped>("/initialpose", 10, std::bind(&ParticleFilter::clickedPose_cb, this, std::placeholders::_1));
 
     map_sub_ = create_subscription<nav_msgs::msg::OccupancyGrid>("/map", rclcpp::QoS(rclcpp::KeepLast(10)).transient_local(), std::bind(&ParticleFilter::map_cb, this, std::placeholders::_1));
-}
-
-void ParticleFilter::laser_odom_cb(const sensor_msgs::msg::LaserScan::ConstSharedPtr& msg, const nav_msgs::msg::Odometry::ConstSharedPtr& odom_msg) {
-    lidar_cb(msg);
-    odom_cb(odom_msg);
-    update();
 }
 
 void ParticleFilter::lidar_cb(const sensor_msgs::msg::LaserScan::ConstSharedPtr& msg) {
@@ -212,6 +203,9 @@ void ParticleFilter::lidar_cb(const sensor_msgs::msg::LaserScan::ConstSharedPtr&
     for (size_t i = 0; i < (msg->ranges).size(); i = i + angle_step_) {
         downsampled_laser_ranges_.push_back(msg->ranges[i]);
     }
+
+    // Run the AMCL update on every lidar scan
+    update();
 }
 
 void ParticleFilter::odom_cb(const nav_msgs::msg::Odometry::ConstSharedPtr& msg) {
