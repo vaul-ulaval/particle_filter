@@ -137,6 +137,8 @@ class ParticleFilter : public rclcpp::Node {
     rclcpp::Time last_stamp_;
     std::vector<double> last_pose_;
     std::vector<double> odometry_data_;
+    double linear_speed;
+    double angular_speed;
 
     double angle_min_;
     double angle_increment_;

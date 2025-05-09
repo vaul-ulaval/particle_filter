@@ -231,6 +231,8 @@ void ParticleFilter::odom_cb(const nav_msgs::msg::Odometry::ConstSharedPtr& msg)
         odometry_data_.push_back(dtheta);
         odom_initialized_ = true;
     }
+    linear_speed = msg->twist.twist.linear.x;
+    angular_speed = msg->twist.twist.angular.z;
     last_pose_.clear();
     last_pose_.push_back(msg->pose.pose.position.x);
     last_pose_.push_back(msg->pose.pose.position.y);
@@ -396,6 +398,8 @@ void ParticleFilter::publishTfOdom() {
         odom->pose.pose.position.x = expected_pose_.x;
         odom->pose.pose.position.y = expected_pose_.y;
         odom->pose.pose.orientation = tf2::toMsg(map_laser_quat);
+        odom->twist.twist.linear.x = linear_speed;
+        odom->twist.twist.angular.z = angular_speed;
         odom_pub_->publish(std::move(odom));
     }
 }
