@@ -32,14 +32,13 @@ ament_auto_add_library(${PROJECT_NAME} SHARED
   src/particle_filter.cpp
 )
 
+target_link_libraries(${PROJECT_NAME}
+  range_libc
+)
 
 rclcpp_components_register_node(${PROJECT_NAME}
   PLUGIN particle_filter::ParticleFilter
   EXECUTABLE particle_filter_node
-)
-
-target_link_libraries(particle_filter_node
-  range_libc
 )
 
 
