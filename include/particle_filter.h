@@ -141,6 +141,17 @@ class ParticleFilter : public rclcpp::Node {
     std::vector<double> downsampled_laser_angles_;
     std::vector<double> downsampled_laser_ranges_;
 
+    // Initial pose
+    bool set_initial_pose_;
+    double init_pose_x_;
+    double init_pose_y_;
+    double init_pose_z_;
+    double init_orientation_x_;
+    double init_orientation_y_;
+    double init_orientation_z_;
+    double init_orientation_w_;
+
+
     // Sampling related tools
     RNG rng_;                                         // Random number generator
     std::uniform_real_distribution<double> x_dist_;   // Distribution of x locations in map frame [0, width)

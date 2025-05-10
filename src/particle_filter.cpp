@@ -54,6 +54,24 @@ void ParticleFilter::loadParam() {
     this->get_parameter("motion_dispersion_y", motion_dispersion_y_);
     this->get_parameter("motion_dispersion_theta", motion_dispersion_theta_);
 
+    this->declare_parameter("set_initial_pose", false);
+    this->declare_parameter("init_pose_x", 0.0);
+    this->declare_parameter("init_pose_y", 0.0);
+    this->declare_parameter("init_pose_z", 0.0);
+    this->declare_parameter("init_orientation_x", 0.0);
+    this->declare_parameter("init_orientation_y", 0.0);
+    this->declare_parameter("init_orientation_z", 0.0);
+    this->declare_parameter("init_orientation_w", 1.0);
+
+    init_pose_x_ = this->get_parameter("init_pose_x").as_double();
+    init_pose_y_ = this->get_parameter("init_pose_y").as_double();
+    init_pose_z_ = this->get_parameter("init_pose_z").as_double();
+    init_orientation_x_ = this->get_parameter("init_orientation_x").as_double();
+    init_orientation_y_ = this->get_parameter("init_orientation_y").as_double();
+    init_orientation_z_ = this->get_parameter("init_orientation_z").as_double();
+    init_orientation_w_ = this->get_parameter("init_orientation_w").as_double();
+    set_initial_pose_ = this->get_parameter("set_initial_pose").as_bool();
+
     x_dist_ = std::uniform_real_distribution<double>();
     y_dist_ = std::uniform_real_distribution<double>();
     th_dist_ = std::uniform_real_distribution<double>();
@@ -573,7 +591,26 @@ void ParticleFilter::map_cb(const nav_msgs::msg::OccupancyGrid::SharedPtr msg) {
     }
 
     precomputeSensorModel();
-    initializeGlobalDistribution();
+
+
+    if (set_initial_pose_) {
+        auto initial_pose = geometry_msgs::msg::PoseWithCovarianceStamped();
+        initial_pose.header.frame_id = "map";
+        initial_pose.header.stamp = this->now();
+        initial_pose.pose.pose.position.x = init_pose_x_;
+        initial_pose.pose.pose.position.y = init_pose_y_;
+        initial_pose.pose.pose.position.z = init_pose_z_;
+        initial_pose.pose.pose.orientation.x = init_orientation_x_;
+        initial_pose.pose.pose.orientation.y = init_orientation_y_;
+        initial_pose.pose.pose.orientation.z = init_orientation_z_;
+        initial_pose.pose.pose.orientation.w = init_orientation_w_;
+
+        initializeParticlesPose(initial_pose);
+    }
+    else {
+        initializeGlobalDistribution();
+    }
+
     map_initialized_ = true;
     map_sub_.reset();
 }
