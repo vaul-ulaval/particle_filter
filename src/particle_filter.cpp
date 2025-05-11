@@ -228,7 +228,7 @@ void ParticleFilter::setupROS() {
                     std::placeholders::_1));
 
   map_sub_ = create_subscription<nav_msgs::msg::OccupancyGrid>(
-      "/map", rclcpp::QoS(rclcpp::KeepLast(10)).transient_local(),
+      "/map", rclcpp::QoS(rclcpp::KeepLast(10)),
       std::bind(&ParticleFilter::map_cb, this, std::placeholders::_1));
 }
 
