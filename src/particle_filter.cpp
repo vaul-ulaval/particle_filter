@@ -192,7 +192,7 @@ void ParticleFilter::setupROS() {
 
     pose_sub_ = create_subscription<geometry_msgs::msg::PoseWithCovarianceStamped>("/initialpose", 10, std::bind(&ParticleFilter::clickedPose_cb, this, std::placeholders::_1));
 
-    map_sub_ = create_subscription<nav_msgs::msg::OccupancyGrid>("/map", rclcpp::QoS(rclcpp::KeepLast(10)).transient_local(), std::bind(&ParticleFilter::map_cb, this, std::placeholders::_1));
+    map_sub_ = create_subscription<nav_msgs::msg::OccupancyGrid>("/map", rclcpp::QoS(rclcpp::KeepLast(10)), std::bind(&ParticleFilter::map_cb, this, std::placeholders::_1));
 }
 
 void ParticleFilter::lidar_cb(const sensor_msgs::msg::LaserScan::ConstSharedPtr& msg) {
