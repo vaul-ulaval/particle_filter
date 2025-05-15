@@ -1,4 +1,5 @@
 #include "particle_filter.h"
+#include <range_libc/RangeLib.h>
 #include <tf2/LinearMath/Matrix3x3.hpp>
 #include <tf2/LinearMath/Quaternion.hpp>
 #include <tf2/time.hpp>
@@ -113,7 +114,7 @@ void ParticleFilter::precomputeSensorModel() {
   }
 
   // Call for method provided in ray casting library range_libc
-  (dynamic_cast<RayMarchingGPU *>(range_method_))
+  (dynamic_cast<RangeMethod *>(range_method_))
       ->set_sensor_model(table, table_width);
 }
 
@@ -381,10 +382,10 @@ void ParticleFilter::sensorModel() {
       obs_[i] = (float)(downsampled_laser_ranges_[i]);
     }
 
-    (dynamic_cast<RayMarchingGPU *>(range_method_))
+    (dynamic_cast<RangeMethod *>(range_method_))
         ->numpy_calc_range_angles(samples_, angles_, outs_, max_particles_num_,
                                   num_downsampled_angles_);
-    (dynamic_cast<RayMarchingGPU *>(range_method_))
+    (dynamic_cast<RangeMethod *>(range_method_))
         ->eval_sensor_model(obs_, outs_, weights_, num_downsampled_angles_,
                             max_particles_num_);
 
@@ -524,7 +525,7 @@ void ParticleFilter::visualize() {
       if (downsampled_laser_ranges_[i] > max_range)
         max_range = downsampled_laser_ranges_[i];
     }
-    (dynamic_cast<RayMarchingGPU *>(range_method_))
+    (dynamic_cast<RangeMethod *>(range_method_))
         ->numpy_calc_range(viz_queries_, viz_ranges_, num_downsampled_angles_);
 
     auto scan = std::make_unique<sensor_msgs::msg::LaserScan>();
@@ -653,11 +654,16 @@ void ParticleFilter::map_cb(const nav_msgs::msg::OccupancyGrid::SharedPtr msg) {
   RCLCPP_INFO_STREAM(get_logger(), "Set range method: " << which_range_method_);
   if (which_range_method_ == "rmgpu") {
     range_method_ = new RayMarchingGPU(map, max_range_px_);
+  } else if (which_range_method_ == "glt") {
+    range_method_ = new GiantLUTCast(map, max_range_px_, theta_discretization_);
+  } else if (which_range_method_ == "rm") {
+    range_method_ = new RayMarching(map, max_range_px_);
+  } else if (which_range_method_ == "bl") {
+    range_method_ = new BresenhamsLine(map, max_range_px_);
+  } else if (which_range_method_ == "cddt") {
+    range_method_ = new CDDTCast(map, max_range_px_, theta_discretization_);
   } else {
-    throw std::runtime_error(
-        "Not yet implemented range_method. "
-        "Please check this parameter in launch file. "
-        "Or modified the code in ParticleFilter::loadMap().");
+    throw std::runtime_error("Invalid range_method value");
   }
 
   precomputeSensorModel();
