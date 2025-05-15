@@ -114,8 +114,16 @@ void ParticleFilter::precomputeSensorModel() {
   }
 
   // Call for method provided in ray casting library range_libc
-  (dynamic_cast<RangeMethod *>(range_method_))
-      ->set_sensor_model(table, table_width);
+  if (which_range_method_ == "rmgpu") {
+    (dynamic_cast<RayMarchingGPU *>(range_method_))
+        ->set_sensor_model(table, table_width);
+  } else if (which_range_method_ == "glt") {
+    (dynamic_cast<GiantLUTCast *>(range_method_))
+        ->set_sensor_model(table, table_width);
+  }
+  else {
+    throw std::runtime_error("Invalid range_method value");
+  }
 }
 
 void ParticleFilter::initializeGlobalDistribution() {
@@ -382,12 +390,25 @@ void ParticleFilter::sensorModel() {
       obs_[i] = (float)(downsampled_laser_ranges_[i]);
     }
 
-    (dynamic_cast<RangeMethod *>(range_method_))
-        ->numpy_calc_range_angles(samples_, angles_, outs_, max_particles_num_,
-                                  num_downsampled_angles_);
-    (dynamic_cast<RangeMethod *>(range_method_))
-        ->eval_sensor_model(obs_, outs_, weights_, num_downsampled_angles_,
-                            max_particles_num_);
+    if (which_range_method_ == "rmgpu") {
+      (dynamic_cast<RayMarchingGPU *>(range_method_))
+          ->numpy_calc_range_angles(samples_, angles_, outs_, max_particles_num_,
+                                    num_downsampled_angles_);
+      (dynamic_cast<RayMarchingGPU *>(range_method_))
+          ->eval_sensor_model(obs_, outs_, weights_, num_downsampled_angles_,
+                              max_particles_num_);
+    }
+    else if (which_range_method_ == "glt") {
+      (dynamic_cast<GiantLUTCast *>(range_method_))
+          ->numpy_calc_range_angles(samples_, angles_, outs_, max_particles_num_,
+                                    num_downsampled_angles_);
+      (dynamic_cast<GiantLUTCast *>(range_method_))
+          ->eval_sensor_model(obs_, outs_, weights_, num_downsampled_angles_,
+                              max_particles_num_);
+    }
+    else {
+      throw std::runtime_error("Invalid range_method value");
+    }
 
     double inv_squash_factor = 1.0 / squash_factor_;
     double weight_sum = 0.0;
@@ -525,8 +546,18 @@ void ParticleFilter::visualize() {
       if (downsampled_laser_ranges_[i] > max_range)
         max_range = downsampled_laser_ranges_[i];
     }
-    (dynamic_cast<RangeMethod *>(range_method_))
-        ->numpy_calc_range(viz_queries_, viz_ranges_, num_downsampled_angles_);
+
+      if (which_range_method_ == "rmgpu") {
+        (dynamic_cast<RayMarchingGPU *>(range_method_))
+            ->numpy_calc_range(viz_queries_, viz_ranges_, num_downsampled_angles_);
+      }
+      else if (which_range_method_ == "glt") {
+        (dynamic_cast<GiantLUTCast *>(range_method_))
+            ->numpy_calc_range(viz_queries_, viz_ranges_, num_downsampled_angles_);
+      }
+      else {
+        throw std::runtime_error("Invalid range_method value");
+      }
 
     auto scan = std::make_unique<sensor_msgs::msg::LaserScan>();
     scan->header.stamp = last_stamp_;
@@ -656,13 +687,8 @@ void ParticleFilter::map_cb(const nav_msgs::msg::OccupancyGrid::SharedPtr msg) {
     range_method_ = new RayMarchingGPU(map, max_range_px_);
   } else if (which_range_method_ == "glt") {
     range_method_ = new GiantLUTCast(map, max_range_px_, theta_discretization_);
-  } else if (which_range_method_ == "rm") {
-    range_method_ = new RayMarching(map, max_range_px_);
-  } else if (which_range_method_ == "bl") {
-    range_method_ = new BresenhamsLine(map, max_range_px_);
-  } else if (which_range_method_ == "cddt") {
-    range_method_ = new CDDTCast(map, max_range_px_, theta_discretization_);
-  } else {
+  }
+  else {
     throw std::runtime_error("Invalid range_method value");
   }
 
