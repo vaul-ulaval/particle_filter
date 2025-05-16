@@ -212,10 +212,14 @@ void ParticleFilter::setupROS() {
   tf_buffer_ = std::make_unique<tf2_ros::Buffer>(this->get_clock());
   tf_listener_ = std::make_unique<tf2_ros::TransformListener>(*tf_buffer_);
 
+  auto control_qos = rclcpp::QoS(1)
+    .reliable()
+    .durability_volatile();
+
   // Set up publishers
   pose_pub_ = create_publisher<geometry_msgs::msg::PoseStamped>(
       "/pf/viz/inferred_pose", 1);
-  odom_pub_ = create_publisher<nav_msgs::msg::Odometry>("/pf/pose/odom", 1);
+  odom_pub_ = create_publisher<nav_msgs::msg::Odometry>("/pf/pose/odom", control_qos);
   particle_pub_ =
       create_publisher<geometry_msgs::msg::PoseArray>("/pf/viz/particles", 1);
   fake_scan_pub_ =
@@ -223,12 +227,13 @@ void ParticleFilter::setupROS() {
 
   // Set up subscribers
   odom_sub_ = create_subscription<nav_msgs::msg::Odometry>(
-      odometry_topic_, 10,
+      odometry_topic_,
+      rclcpp::SensorDataQoS().keep_last(1),
       std::bind(&ParticleFilter::odom_cb, this, std::placeholders::_1));
   laser_sub_ = create_subscription<sensor_msgs::msg::LaserScan>(
-      scan_topic_, 10,
+      scan_topic_, 
+      rclcpp::SensorDataQoS().keep_last(1),
       std::bind(&ParticleFilter::lidar_cb, this, std::placeholders::_1));
-  // TODO: lidar sub should be reliable?
 
   pose_sub_ =
       create_subscription<geometry_msgs::msg::PoseWithCovarianceStamped>(
