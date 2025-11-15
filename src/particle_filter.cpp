@@ -120,8 +120,7 @@ void ParticleFilter::precomputeSensorModel() {
   } else if (which_range_method_ == "glt") {
     (dynamic_cast<GiantLUTCast *>(range_method_))
         ->set_sensor_model(table, table_width);
-  }
-  else {
+  } else {
     throw std::runtime_error("Invalid range_method value");
   }
 }
@@ -212,14 +211,14 @@ void ParticleFilter::setupROS() {
   tf_buffer_ = std::make_unique<tf2_ros::Buffer>(this->get_clock());
   tf_listener_ = std::make_unique<tf2_ros::TransformListener>(*tf_buffer_);
 
-  auto control_qos = rclcpp::QoS(1)
-    .reliable()
-    .durability_volatile();
+  auto control_qos =
+      rclcpp::QoS(1).best_effort().durability_volatile().keep_last(1);
 
   // Set up publishers
   pose_pub_ = create_publisher<geometry_msgs::msg::PoseStamped>(
       "/pf/viz/inferred_pose", 1);
-  odom_pub_ = create_publisher<nav_msgs::msg::Odometry>("/pf/pose/odom", control_qos);
+  odom_pub_ =
+      create_publisher<nav_msgs::msg::Odometry>("/pf/pose/odom", control_qos);
   particle_pub_ =
       create_publisher<geometry_msgs::msg::PoseArray>("/pf/viz/particles", 1);
   fake_scan_pub_ =
@@ -227,12 +226,10 @@ void ParticleFilter::setupROS() {
 
   // Set up subscribers
   odom_sub_ = create_subscription<nav_msgs::msg::Odometry>(
-      odometry_topic_,
-      rclcpp::SensorDataQoS().keep_last(1),
+      odometry_topic_, rclcpp::SensorDataQoS().keep_last(1),
       std::bind(&ParticleFilter::odom_cb, this, std::placeholders::_1));
   laser_sub_ = create_subscription<sensor_msgs::msg::LaserScan>(
-      scan_topic_, 
-      rclcpp::SensorDataQoS().keep_last(1),
+      scan_topic_, rclcpp::SensorDataQoS().keep_last(1),
       std::bind(&ParticleFilter::lidar_cb, this, std::placeholders::_1));
 
   pose_sub_ =
@@ -397,21 +394,21 @@ void ParticleFilter::sensorModel() {
 
     if (which_range_method_ == "rmgpu") {
       (dynamic_cast<RayMarchingGPU *>(range_method_))
-          ->numpy_calc_range_angles(samples_, angles_, outs_, max_particles_num_,
+          ->numpy_calc_range_angles(samples_, angles_, outs_,
+                                    max_particles_num_,
                                     num_downsampled_angles_);
       (dynamic_cast<RayMarchingGPU *>(range_method_))
           ->eval_sensor_model(obs_, outs_, weights_, num_downsampled_angles_,
                               max_particles_num_);
-    }
-    else if (which_range_method_ == "glt") {
+    } else if (which_range_method_ == "glt") {
       (dynamic_cast<GiantLUTCast *>(range_method_))
-          ->numpy_calc_range_angles(samples_, angles_, outs_, max_particles_num_,
+          ->numpy_calc_range_angles(samples_, angles_, outs_,
+                                    max_particles_num_,
                                     num_downsampled_angles_);
       (dynamic_cast<GiantLUTCast *>(range_method_))
           ->eval_sensor_model(obs_, outs_, weights_, num_downsampled_angles_,
                               max_particles_num_);
-    }
-    else {
+    } else {
       throw std::runtime_error("Invalid range_method value");
     }
 
@@ -552,17 +549,17 @@ void ParticleFilter::visualize() {
         max_range = downsampled_laser_ranges_[i];
     }
 
-      if (which_range_method_ == "rmgpu") {
-        (dynamic_cast<RayMarchingGPU *>(range_method_))
-            ->numpy_calc_range(viz_queries_, viz_ranges_, num_downsampled_angles_);
-      }
-      else if (which_range_method_ == "glt") {
-        (dynamic_cast<GiantLUTCast *>(range_method_))
-            ->numpy_calc_range(viz_queries_, viz_ranges_, num_downsampled_angles_);
-      }
-      else {
-        throw std::runtime_error("Invalid range_method value");
-      }
+    if (which_range_method_ == "rmgpu") {
+      (dynamic_cast<RayMarchingGPU *>(range_method_))
+          ->numpy_calc_range(viz_queries_, viz_ranges_,
+                             num_downsampled_angles_);
+    } else if (which_range_method_ == "glt") {
+      (dynamic_cast<GiantLUTCast *>(range_method_))
+          ->numpy_calc_range(viz_queries_, viz_ranges_,
+                             num_downsampled_angles_);
+    } else {
+      throw std::runtime_error("Invalid range_method value");
+    }
 
     auto scan = std::make_unique<sensor_msgs::msg::LaserScan>();
     scan->header.stamp = last_stamp_;
@@ -692,8 +689,7 @@ void ParticleFilter::map_cb(const nav_msgs::msg::OccupancyGrid::SharedPtr msg) {
     range_method_ = new RayMarchingGPU(map, max_range_px_);
   } else if (which_range_method_ == "glt") {
     range_method_ = new GiantLUTCast(map, max_range_px_, theta_discretization_);
-  }
-  else {
+  } else {
     throw std::runtime_error("Invalid range_method value");
   }
 
