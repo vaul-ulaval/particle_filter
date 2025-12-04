@@ -302,6 +302,37 @@ void ParticleFilter::odom_cb(
   last_stamp_ = msg->header.stamp;
 }
 
+void ParticleFilter::applyRoughening() {
+  // Calculate effective sample size (ESS) to detect particle degeneracy
+  double weight_sum_sq = 0.0;
+  for (int i = 0; i < max_particles_num_; i++) {
+    weight_sum_sq += particles_[i].weight * particles_[i].weight;
+  }
+  double n_eff = 1.0 / weight_sum_sq;
+
+  // If ESS is high (weights are uniform), sensor data is uninformative
+  // Add extra noise to prevent particle collapse in ambiguous scenarios
+  double ess_threshold = max_particles_num_ * 0.2; // 50% of particles
+
+  if (n_eff > ess_threshold) {
+    // Weights are very uniform - we're in a low-information scenario (like a
+    // corridor)
+    std::normal_distribution<double> rough_x(0.0, 0.1);     // 10cm extra noise
+    std::normal_distribution<double> rough_y(0.0, 0.05);    // 5cm lateral noise
+    std::normal_distribution<double> rough_theta(0.0, 0.1); // ~5.7 deg noise
+    std::mt19937 generator = rng_.engine();
+
+    for (int i = 0; i < max_particles_num_; i++) {
+      particles_[i].x += rough_x(generator);
+      particles_[i].y += rough_y(generator);
+      particles_[i].theta += rough_theta(generator);
+    }
+
+    RCLCPP_INFO(this->get_logger(), "Applied roughening - ESS: %.1f / %d",
+                n_eff, max_particles_num_);
+  }
+}
+
 void ParticleFilter::update() {
   // Execute update only when everything is ready
   if (!(lidar_initialized_ && odom_initialized_ && map_initialized_))
@@ -315,6 +346,8 @@ void ParticleFilter::update() {
   motionModel();
   // Sensor model
   sensorModel();
+  // Apply roughening if sensor information is poor (optional)
+  // applyRoughening();
   // Calculate the average particle
   expectedPose();
 
@@ -372,7 +405,8 @@ void ParticleFilter::motionModel() {
     double noisy_odom_y = odometry_data_[1] + distribution2(generator);
     double noisy_odom_theta = odometry_data_[2] + distribution3(generator);
 
-    // Transform noisy local odometry to global frame using particle's orientation
+    // Transform noisy local odometry to global frame using particle's
+    // orientation
     double cosine = cos(particles_[i].theta);
     double sine = sin(particles_[i].theta);
 
@@ -525,9 +559,9 @@ void ParticleFilter::visualize() {
     auto particles_ros = std::make_unique<geometry_msgs::msg::PoseArray>();
     particles_ros->header.stamp = this->now();
     particles_ros->header.frame_id = "map";
-    particles_ros->poses.resize(max_particles_num_);
+    particles_ros->poses.resize(max_viz_particles_);
 
-    for (int i = 0; i < max_particles_num_; i++) {
+    for (int i = 0; i < max_viz_particles_; i++) {
       geometry_msgs::msg::Pose pose_ros;
       pose_ros.position.x = particles_[i].x;
       pose_ros.position.y = particles_[i].y;
