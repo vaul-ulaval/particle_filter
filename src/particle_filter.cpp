@@ -360,22 +360,29 @@ void ParticleFilter::sampling() {
 }
 
 void ParticleFilter::motionModel() {
+  // Apply noise in local frame, then transform to global frame
   std::normal_distribution<double> distribution1(0.0, motion_dispersion_x_);
   std::normal_distribution<double> distribution2(0.0, motion_dispersion_y_);
   std::normal_distribution<double> distribution3(0.0, motion_dispersion_theta_);
   std::mt19937 generator = rng_.engine();
 
   for (int i = 0; i < max_particles_num_; i++) {
+    // Add noise to odometry in local frame
+    double noisy_odom_x = odometry_data_[0] + distribution1(generator);
+    double noisy_odom_y = odometry_data_[1] + distribution2(generator);
+    double noisy_odom_theta = odometry_data_[2] + distribution3(generator);
+
+    // Transform noisy local odometry to global frame using particle's orientation
     double cosine = cos(particles_[i].theta);
     double sine = sin(particles_[i].theta);
 
-    double local_dx = cosine * odometry_data_[0] - sine * odometry_data_[1];
-    double local_dy = sine * odometry_data_[0] + cosine * odometry_data_[1];
-    double local_dtheta = odometry_data_[2];
+    double global_dx = cosine * noisy_odom_x - sine * noisy_odom_y;
+    double global_dy = sine * noisy_odom_x + cosine * noisy_odom_y;
 
-    particles_[i].x += local_dx + distribution1(generator);
-    particles_[i].y += local_dy + distribution2(generator);
-    particles_[i].theta += local_dtheta + distribution3(generator);
+    // Update particle pose in global frame
+    particles_[i].x += global_dx;
+    particles_[i].y += global_dy;
+    particles_[i].theta += noisy_odom_theta;
   }
 }
 
