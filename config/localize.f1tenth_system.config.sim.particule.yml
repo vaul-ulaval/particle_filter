@@ -1,0 +1,56 @@
+particle_filter:
+  ros__parameters:
+    # topic names
+    scan_topic: "/autodrive/roboracer_1/lidar"
+    odometry_topic: "/odometry/filtered"
+    # range data downsampling
+    angle_step: 18
+    max_particles: 2000
+    squash_factor: 2.2
+    # visualization
+    viz: 1
+    max_viz_particles: 200
+    # ray marching method
+    range_method: "rmgpu" # rmgpu if cuda available
+    theta_discretization: 112.0
+    # range data filtering
+    max_range: 10.0
+    publish_odom: 1
+    # sensor model constants
+    z_short: 0.01 # Weight for shorter than expected range r < d
+    z_max: 0.07 # Weight for maximum range r = d
+    z_rand: 0.12 # Random
+    z_hit: 0.75 # Gaussian around d
+
+    sigma_hit: 8.0 # Standard deviation of Gaussian around d
+
+    # motion model dispersion constants (baseline Gaussian std-dev in meters/rad)
+    # NOTE: these are read once when the node starts. Change the config or relaunch
+    # instead of using `ros2 param set` if you need different values.
+    motion_dispersion_x: 0.03
+    motion_dispersion_y: 0.015
+    motion_dispersion_theta: 0.25
+    # slip adaptive noise parameters (modulate motion noise + odom attenuation)
+    slip_alpha: 0.2 # low-pass filter for slip ratio (0=slow, 1=instant)
+    slip_scale_x: 3.5 # longitudinal noise multiplier per unit slip
+    slip_scale_y: 0.4 # lateral noise multiplier per unit slip
+    slip_scale_theta: 1.0 # yaw noise multiplier per unit slip
+    slip_max_x: 7.0 # clamp for longitudinal noise scale
+    slip_max_y: 2.0 # clamp for lateral noise scale
+    slip_max_theta: 3.0 # clamp for yaw noise scale
+    slip_odom_gain: 2.0 # strength of odom delta attenuation when slip>0
+    slip_odom_min_factor: 0.25 # minimum fraction of odom delta that will be applied
+    slip_reference_floor: 0.5 # seconds before wheel speed considered stale
+    wheel_speed_topic: "/autodrive/roboracer_1/wheel_odom" # remap if driver publishes elsewhere
+    # sensor model variant, variant 2 good for rmgpu, 3 doesn't work for rmgpu
+    rangelib_variant: 2
+
+    # initial pose
+    set_initial_pose: true
+    init_pose_x: 0.750
+    init_pose_y: 7.658
+    init_pose_z: 0.059
+    init_orientation_x: 0.011
+    init_orientation_y: 0.011
+    init_orientation_z: -0.707
+    init_orientation_w: 0.707
