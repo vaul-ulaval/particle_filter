@@ -1,4 +1,7 @@
 #include "particle_filter.h"
+
+#include <algorithm>
+#include <cmath>
 #include <range_libc/RangeLib.h>
 #include <tf2/LinearMath/Matrix3x3.hpp>
 #include <tf2/LinearMath/Quaternion.hpp>
@@ -36,6 +39,19 @@ void ParticleFilter::loadParam() {
   this->declare_parameter("motion_dispersion_x", 0.05);
   this->declare_parameter("motion_dispersion_y", 0.025);
   this->declare_parameter("motion_dispersion_theta", 0.25);
+  this->declare_parameter("slip_alpha", 0.2);
+  this->declare_parameter("slip_scale_x", 3.0);
+  this->declare_parameter("slip_scale_y", 0.4);
+  this->declare_parameter("slip_scale_theta", 1.0);
+  this->declare_parameter("slip_max_x", 5.0);
+  this->declare_parameter("slip_max_y", 2.0);
+  this->declare_parameter("slip_max_theta", 3.0);
+  this->declare_parameter("slip_odom_gain", 2.0);
+  this->declare_parameter("slip_odom_min_factor", 0.1);
+  this->declare_parameter("slip_reference_floor", 0.5);
+  this->declare_parameter("slip_wheel_timeout", 0.3);
+  this->declare_parameter("wheel_speed_topic",
+                          std::string("/autodrive/roboracer_1/wheel_odom"));
 
   this->get_parameter("scan_topic", scan_topic_);
   this->get_parameter("odometry_topic", odometry_topic_);
@@ -58,6 +74,23 @@ void ParticleFilter::loadParam() {
   this->get_parameter("motion_dispersion_x", motion_dispersion_x_);
   this->get_parameter("motion_dispersion_y", motion_dispersion_y_);
   this->get_parameter("motion_dispersion_theta", motion_dispersion_theta_);
+  this->get_parameter("slip_alpha", slip_alpha_);
+  this->get_parameter("slip_scale_x", slip_scale_x_);
+  this->get_parameter("slip_scale_y", slip_scale_y_);
+  this->get_parameter("slip_scale_theta", slip_scale_theta_);
+  this->get_parameter("slip_max_x", slip_max_x_);
+  this->get_parameter("slip_max_y", slip_max_y_);
+  this->get_parameter("slip_max_theta", slip_max_theta_);
+  this->get_parameter("slip_odom_gain", slip_odom_gain_);
+  this->get_parameter("slip_odom_min_factor", slip_odom_min_factor_);
+  this->get_parameter("slip_reference_floor", slip_reference_floor_);
+  this->get_parameter("slip_wheel_timeout", slip_wheel_timeout_);
+  this->get_parameter("wheel_speed_topic", wheel_speed_topic_);
+
+  slip_alpha_ = std::clamp(slip_alpha_, 0.0, 1.0);
+  slip_odom_min_factor_ = std::clamp(slip_odom_min_factor_, 0.0, 1.0);
+  slip_reference_floor_ = std::max(slip_reference_floor_, 1e-3);
+  slip_wheel_timeout_ = std::max(slip_wheel_timeout_, 1e-3);
 
   this->declare_parameter("set_initial_pose", false);
   this->declare_parameter("init_pose_x", 0.0);
@@ -80,6 +113,12 @@ void ParticleFilter::loadParam() {
   x_dist_ = std::uniform_real_distribution<double>();
   y_dist_ = std::uniform_real_distribution<double>();
   th_dist_ = std::uniform_real_distribution<double>();
+
+  slip_ratio_filtered_ = 0.0;
+  slip_ratio_raw_ = 0.0;
+  has_last_odom_stamp_ = false;
+  has_wheel_speed_ = false;
+  wheel_speed_latest_ = 0.0;
 }
 
 void ParticleFilter::precomputeSensorModel() {
@@ -228,6 +267,9 @@ void ParticleFilter::setupROS() {
   odom_sub_ = create_subscription<nav_msgs::msg::Odometry>(
       odometry_topic_, rclcpp::SensorDataQoS().keep_last(1),
       std::bind(&ParticleFilter::odom_cb, this, std::placeholders::_1));
+  wheel_odom_sub_ = create_subscription<nav_msgs::msg::Odometry>(
+      wheel_speed_topic_, rclcpp::SensorDataQoS().keep_last(1),
+      std::bind(&ParticleFilter::wheel_odom_cb, this, std::placeholders::_1));
   laser_sub_ = create_subscription<sensor_msgs::msg::LaserScan>(
       scan_topic_, rclcpp::SensorDataQoS().keep_last(1),
       std::bind(&ParticleFilter::lidar_cb, this, std::placeholders::_1));
@@ -287,10 +329,55 @@ void ParticleFilter::odom_cb(
     double s = sin(-last_pose_[2]);
     double local_delta_x = dx * c - dy * s;
     double local_delta_y = dx * s + dy * c;
+    rclcpp::Time current_stamp(msg->header.stamp);
+    double dt = 0.0;
+    if (has_last_odom_stamp_) {
+      dt = (current_stamp - last_odom_stamp_).seconds();
+    }
+    if (dt <= 1e-4) {
+      dt = 1e-4;
+    }
     odometry_data_.clear();
     odometry_data_.push_back(local_delta_x);
     odometry_data_.push_back(local_delta_y);
     odometry_data_.push_back(dtheta);
+
+    const double reference_speed = std::abs(msg->twist.twist.linear.x);
+    double wheel_speed_forward = std::abs(local_delta_x) / dt;
+    bool wheel_valid = false;
+    if (has_wheel_speed_) {
+      double wheel_dt = (current_stamp - last_wheel_stamp_).seconds();
+      if (wheel_dt <= slip_wheel_timeout_) {
+        wheel_speed_forward = std::abs(wheel_speed_latest_);
+        wheel_valid = true;
+      }
+    }
+
+    double slip_raw = 0.0;
+    if (wheel_speed_forward > reference_speed) {
+      slip_raw = (wheel_speed_forward - reference_speed) /
+                 std::max(reference_speed, slip_reference_floor_);
+    }
+    slip_raw = std::clamp(slip_raw, 0.0, 10.0);
+    slip_ratio_filtered_ =
+        slip_alpha_ * slip_raw + (1.0 - slip_alpha_) * slip_ratio_filtered_;
+    slip_ratio_raw_ = slip_raw;
+
+    double attenuation = 1.0;
+    if (slip_ratio_filtered_ > 0.0) {
+      attenuation =
+          1.0 / (1.0 + std::max(0.0, slip_odom_gain_) * slip_ratio_filtered_);
+      attenuation = std::clamp(attenuation, slip_odom_min_factor_, 1.0);
+      odometry_data_[0] *= attenuation;
+      odometry_data_[1] *= attenuation;
+    }
+
+    RCLCPP_DEBUG_THROTTLE(
+        this->get_logger(), *this->get_clock(), 2000,
+        "Slip raw: %.2f filtered: %.2f (wheel %.2f m/s %s, ref "
+        "%.2f m/s, dt %.3f s, atten %.2f)",
+        slip_ratio_raw_, slip_ratio_filtered_, wheel_speed_forward,
+        wheel_valid ? "valid" : "fallback", reference_speed, dt, attenuation);
     odom_initialized_ = true;
   }
   linear_speed = msg->twist.twist.linear.x;
@@ -300,6 +387,15 @@ void ParticleFilter::odom_cb(
   last_pose_.push_back(msg->pose.pose.position.y);
   last_pose_.push_back(getYaw(msg->pose.pose.orientation));
   last_stamp_ = msg->header.stamp;
+  last_odom_stamp_ = rclcpp::Time(msg->header.stamp);
+  has_last_odom_stamp_ = true;
+}
+
+void ParticleFilter::wheel_odom_cb(
+    const nav_msgs::msg::Odometry::ConstSharedPtr &msg) {
+  wheel_speed_latest_ = msg->twist.twist.linear.x;
+  last_wheel_stamp_ = rclcpp::Time(msg->header.stamp);
+  has_wheel_speed_ = true;
 }
 
 void ParticleFilter::applyRoughening() {
@@ -394,10 +490,26 @@ void ParticleFilter::sampling() {
 
 void ParticleFilter::motionModel() {
   // Apply noise in local frame, then transform to global frame
-  std::normal_distribution<double> distribution1(0.0, motion_dispersion_x_);
-  std::normal_distribution<double> distribution2(0.0, motion_dispersion_y_);
-  std::normal_distribution<double> distribution3(0.0, motion_dispersion_theta_);
+  const double slip = slip_ratio_filtered_;
+  const double scale_x =
+      std::clamp(1.0 + slip_scale_x_ * slip, 1.0, slip_max_x_);
+  const double scale_y =
+      std::clamp(1.0 + slip_scale_y_ * slip, 1.0, slip_max_y_);
+  const double scale_theta =
+      std::clamp(1.0 + slip_scale_theta_ * slip, 1.0, slip_max_theta_);
+
+  std::normal_distribution<double> distribution1(0.0, motion_dispersion_x_ *
+                                                          scale_x);
+  std::normal_distribution<double> distribution2(0.0, motion_dispersion_y_ *
+                                                          scale_y);
+  std::normal_distribution<double> distribution3(0.0, motion_dispersion_theta_ *
+                                                          scale_theta);
   std::mt19937 generator = rng_.engine();
+
+  RCLCPP_DEBUG_THROTTLE(
+      this->get_logger(), *this->get_clock(), 2000,
+      "Motion noise scales - slip: %.2f, sx: %.2f, sy: %.2f, st: %.2f", slip,
+      scale_x, scale_y, scale_theta);
 
   for (int i = 0; i < max_particles_num_; i++) {
     // Add noise to odometry in local frame

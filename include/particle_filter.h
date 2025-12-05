@@ -91,6 +91,7 @@ public:
   // Callback functions
   void lidar_cb(const sensor_msgs::msg::LaserScan::ConstSharedPtr &msg);
   void odom_cb(const nav_msgs::msg::Odometry::ConstSharedPtr &msg);
+  void wheel_odom_cb(const nav_msgs::msg::Odometry::ConstSharedPtr &msg);
   void laser_odom_cb(const sensor_msgs::msg::LaserScan::ConstSharedPtr &msg,
                      const nav_msgs::msg::Odometry::ConstSharedPtr &odom_msg);
   void clickedPose_cb(
@@ -120,6 +121,7 @@ private:
   rclcpp::Publisher<sensor_msgs::msg::LaserScan>::SharedPtr fake_scan_pub_;
 
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
+  rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr wheel_odom_sub_;
   rclcpp::Subscription<sensor_msgs::msg::LaserScan>::SharedPtr laser_sub_;
 
   rclcpp::Subscription<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr
@@ -174,6 +176,7 @@ private:
   // topic parameters
   std::string scan_topic_;
   std::string odometry_topic_;
+  std::string wheel_speed_topic_;
 
   // sensor model constants
   double z_short_;
@@ -186,6 +189,26 @@ private:
   double motion_dispersion_x_;
   double motion_dispersion_y_;
   double motion_dispersion_theta_;
+
+  // slip adaptive noise parameters
+  double slip_alpha_;
+  double slip_scale_x_;
+  double slip_scale_y_;
+  double slip_scale_theta_;
+  double slip_max_x_;
+  double slip_max_y_;
+  double slip_max_theta_;
+  double slip_ratio_filtered_;
+  double slip_ratio_raw_;
+  double slip_odom_gain_;
+  double slip_odom_min_factor_;
+  double slip_reference_floor_;
+  double slip_wheel_timeout_;
+  rclcpp::Time last_odom_stamp_;
+  rclcpp::Time last_wheel_stamp_;
+  bool has_last_odom_stamp_;
+  bool has_wheel_speed_;
+  double wheel_speed_latest_;
 
   // options
   int viz_;
