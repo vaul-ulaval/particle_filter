@@ -1,6 +1,7 @@
 #ifndef PARTICLE_FILTER_H
 #define PARTICLE_FILTER_H
 
+#include <rcl_interfaces/msg/set_parameters_result.hpp>
 #include <rclcpp/rclcpp.hpp>
 
 #include <geometry_msgs/msg/pose_array.hpp>
@@ -8,6 +9,7 @@
 #include <geometry_msgs/msg/pose_with_covariance_stamped.hpp>
 #include <nav_msgs/msg/occupancy_grid.hpp>
 #include <nav_msgs/msg/odometry.hpp>
+#include <sensor_msgs/msg/imu.hpp>
 #include <sensor_msgs/msg/laser_scan.hpp>
 #include <tf2/LinearMath/Quaternion.h>
 #include <tf2_geometry_msgs/tf2_geometry_msgs.hpp>
@@ -92,6 +94,7 @@ public:
   void lidar_cb(const sensor_msgs::msg::LaserScan::ConstSharedPtr &msg);
   void odom_cb(const nav_msgs::msg::Odometry::ConstSharedPtr &msg);
   void wheel_odom_cb(const nav_msgs::msg::Odometry::ConstSharedPtr &msg);
+  void imu_cb(const sensor_msgs::msg::Imu::ConstSharedPtr &msg);
   void laser_odom_cb(const sensor_msgs::msg::LaserScan::ConstSharedPtr &msg,
                      const nav_msgs::msg::Odometry::ConstSharedPtr &odom_msg);
   void clickedPose_cb(
@@ -112,8 +115,16 @@ public:
   std::vector<unsigned int> worldToMap(std::vector<double> position);
   std::vector<double> mapToWorld(std::vector<unsigned int> idx);
   double getYaw(const geometry_msgs::msg::Quaternion &q);
+  double detectCorridorAmbiguity(); // returns 0-1 corridor confidence
+
+  // Dynamic parameter callback
+  rcl_interfaces::msg::SetParametersResult
+  onParameterChange(const std::vector<rclcpp::Parameter> &parameters);
 
 private:
+  // Parameter callback handle
+  rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr
+      param_callback_handle_;
   // ROS interface
   rclcpp::Publisher<geometry_msgs::msg::PoseStamped>::SharedPtr pose_pub_;
   rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr odom_pub_;
@@ -123,6 +134,7 @@ private:
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr odom_sub_;
   rclcpp::Subscription<nav_msgs::msg::Odometry>::SharedPtr wheel_odom_sub_;
   rclcpp::Subscription<sensor_msgs::msg::LaserScan>::SharedPtr laser_sub_;
+  rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr imu_sub_;
 
   rclcpp::Subscription<geometry_msgs::msg::PoseWithCovarianceStamped>::SharedPtr
       pose_sub_;
@@ -210,6 +222,20 @@ private:
   bool has_wheel_speed_;
   double wheel_speed_latest_;
 
+  // IMU-based velocity estimation for slip detection
+  std::string imu_topic_;
+  rclcpp::Time last_imu_stamp_;
+  bool has_imu_;
+  double imu_speed_estimate_; // integrated from IMU accel
+  double imu_accel_x_;        // latest longitudinal acceleration
+  double imu_speed_alpha_;    // filter coefficient for IMU speed
+
+  // Feature toggles for modulation (explicit on/off switches)
+  bool enable_slip_motion_;     // scale motion noise with slip
+  bool enable_slip_odom_;       // attenuate odom displacement with slip
+  bool enable_imu_slip_;        // use IMU-based velocity for slip detection
+  bool enable_corridor_squash_; // adjust squash factor in corridors
+
   // options
   int viz_;
   int fine_timing_;
@@ -224,11 +250,20 @@ private:
   std::string which_range_method_;
   double theta_discretization_;
   double squash_factor_;
+  double squash_factor_corridor_;  // reduced squash when in corridor
+  double corridor_confidence_;     // 0-1 how much we're in a corridor
+  double corridor_alpha_;          // filter for corridor detection
+  double corridor_wall_threshold_; // max range to consider as wall
   double max_range_;
 
   // Timing related variables
   double sensor_model_calc_worst_time_;
   double motion_model_calc_worst_time_;
+
+  // GPU warmup delay (shared GPU environments)
+  double gpu_warmup_time_;
+  rclcpp::Time gpu_init_time_;
+  bool gpu_warmed_up_;
 
   // Set up array pointers
   float *angles_;

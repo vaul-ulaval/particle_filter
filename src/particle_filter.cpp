@@ -52,6 +52,20 @@ void ParticleFilter::loadParam() {
   this->declare_parameter("slip_wheel_timeout", 0.3);
   this->declare_parameter("wheel_speed_topic",
                           std::string("/autodrive/roboracer_1/wheel_odom"));
+  this->declare_parameter("imu_topic",
+                          std::string("/autodrive/roboracer_1/imu_unbiased"));
+  this->declare_parameter("imu_speed_alpha", 0.1);
+  this->declare_parameter("gpu_warmup_time", 1.0);
+  // Feature toggles (default: keep current behavior enabled)
+  this->declare_parameter("enable_slip_motion", true);
+  this->declare_parameter("enable_slip_odom", true);
+  this->declare_parameter("enable_imu_slip", true);
+  this->declare_parameter("enable_corridor_squash", true);
+  // Corridor ambiguity detection parameters
+  this->declare_parameter("squash_factor_corridor",
+                          1.2);                   // lower = trust odom more
+  this->declare_parameter("corridor_alpha", 0.3); // filter smoothing
+  this->declare_parameter("corridor_wall_threshold", 3.0); // max range for wall
 
   this->get_parameter("scan_topic", scan_topic_);
   this->get_parameter("odometry_topic", odometry_topic_);
@@ -86,6 +100,21 @@ void ParticleFilter::loadParam() {
   this->get_parameter("slip_reference_floor", slip_reference_floor_);
   this->get_parameter("slip_wheel_timeout", slip_wheel_timeout_);
   this->get_parameter("wheel_speed_topic", wheel_speed_topic_);
+  this->get_parameter("imu_topic", imu_topic_);
+  this->get_parameter("imu_speed_alpha", imu_speed_alpha_);
+  this->get_parameter("gpu_warmup_time", gpu_warmup_time_);
+  // Feature toggles
+  this->get_parameter("enable_slip_motion", enable_slip_motion_);
+  this->get_parameter("enable_slip_odom", enable_slip_odom_);
+  this->get_parameter("enable_imu_slip", enable_imu_slip_);
+  this->get_parameter("enable_corridor_squash", enable_corridor_squash_);
+  // Corridor detection parameters
+  this->get_parameter("squash_factor_corridor", squash_factor_corridor_);
+  this->get_parameter("corridor_alpha", corridor_alpha_);
+  this->get_parameter("corridor_wall_threshold", corridor_wall_threshold_);
+
+  gpu_warmup_time_ = std::max(gpu_warmup_time_, 0.0);
+  gpu_warmed_up_ = (gpu_warmup_time_ <= 0.0);
 
   slip_alpha_ = std::clamp(slip_alpha_, 0.0, 1.0);
   slip_odom_min_factor_ = std::clamp(slip_odom_min_factor_, 0.0, 1.0);
@@ -119,6 +148,25 @@ void ParticleFilter::loadParam() {
   has_last_odom_stamp_ = false;
   has_wheel_speed_ = false;
   wheel_speed_latest_ = 0.0;
+
+  // IMU-based velocity estimation
+  has_imu_ = false;
+  imu_speed_estimate_ = 0.0;
+  imu_accel_x_ = 0.0;
+
+  // Corridor ambiguity detection
+  corridor_confidence_ = 0.0;
+
+  // Default feature toggles are already set from parameters; no extra init
+
+  // Initialize timestamps to current time to avoid large initial timeout
+  last_odom_stamp_ = this->now();
+  last_wheel_stamp_ = this->now();
+  last_imu_stamp_ = this->now();
+
+  // Register dynamic parameter callback for rqt_reconfigure support
+  param_callback_handle_ = this->add_on_set_parameters_callback(std::bind(
+      &ParticleFilter::onParameterChange, this, std::placeholders::_1));
 }
 
 void ParticleFilter::precomputeSensorModel() {
@@ -270,6 +318,9 @@ void ParticleFilter::setupROS() {
   wheel_odom_sub_ = create_subscription<nav_msgs::msg::Odometry>(
       wheel_speed_topic_, rclcpp::SensorDataQoS().keep_last(1),
       std::bind(&ParticleFilter::wheel_odom_cb, this, std::placeholders::_1));
+  imu_sub_ = create_subscription<sensor_msgs::msg::Imu>(
+      imu_topic_, rclcpp::SensorDataQoS().keep_last(1),
+      std::bind(&ParticleFilter::imu_cb, this, std::placeholders::_1));
   laser_sub_ = create_subscription<sensor_msgs::msg::LaserScan>(
       scan_topic_, rclcpp::SensorDataQoS().keep_last(1),
       std::bind(&ParticleFilter::lidar_cb, this, std::placeholders::_1));
@@ -342,19 +393,32 @@ void ParticleFilter::odom_cb(
     odometry_data_.push_back(local_delta_y);
     odometry_data_.push_back(dtheta);
 
-    const double reference_speed = std::abs(msg->twist.twist.linear.x);
-    double wheel_speed_forward = std::abs(local_delta_x) / dt;
-    bool wheel_valid = false;
+    // Get wheel speed from odom
+    double wheel_speed_forward = std::abs(msg->twist.twist.linear.x);
     if (has_wheel_speed_) {
       double wheel_dt = (current_stamp - last_wheel_stamp_).seconds();
       if (wheel_dt <= slip_wheel_timeout_) {
         wheel_speed_forward = std::abs(wheel_speed_latest_);
-        wheel_valid = true;
       }
     }
 
+    // Use IMU-integrated speed as reference (independent of wheels)
+    // When wheels slip, they report higher speed than IMU estimates
+    double reference_speed = wheel_speed_forward; // fallback
+    bool imu_valid = false;
+    if (has_imu_) {
+      double imu_dt = (current_stamp - last_imu_stamp_).seconds();
+      if (imu_dt <= slip_wheel_timeout_) {
+        reference_speed = imu_speed_estimate_;
+        imu_valid = true;
+      }
+    }
+
+    // Slip detection: wheel speed > IMU-estimated speed means wheels are
+    // spinning. Can be disabled entirely via enable_imu_slip.
     double slip_raw = 0.0;
-    if (wheel_speed_forward > reference_speed) {
+    if (enable_imu_slip_ && wheel_speed_forward > reference_speed &&
+        imu_valid) {
       slip_raw = (wheel_speed_forward - reference_speed) /
                  std::max(reference_speed, slip_reference_floor_);
     }
@@ -363,8 +427,10 @@ void ParticleFilter::odom_cb(
         slip_alpha_ * slip_raw + (1.0 - slip_alpha_) * slip_ratio_filtered_;
     slip_ratio_raw_ = slip_raw;
 
+    // Attenuate odometry when slip detected. Can be toggled with
+    // enable_slip_odom_ so you can keep slip estimation but not touch odom.
     double attenuation = 1.0;
-    if (slip_ratio_filtered_ > 0.0) {
+    if (enable_slip_odom_ && slip_ratio_filtered_ > 0.0) {
       attenuation =
           1.0 / (1.0 + std::max(0.0, slip_odom_gain_) * slip_ratio_filtered_);
       attenuation = std::clamp(attenuation, slip_odom_min_factor_, 1.0);
@@ -372,12 +438,12 @@ void ParticleFilter::odom_cb(
       odometry_data_[1] *= attenuation;
     }
 
-    RCLCPP_DEBUG_THROTTLE(
-        this->get_logger(), *this->get_clock(), 2000,
-        "Slip raw: %.2f filtered: %.2f (wheel %.2f m/s %s, ref "
-        "%.2f m/s, dt %.3f s, atten %.2f)",
-        slip_ratio_raw_, slip_ratio_filtered_, wheel_speed_forward,
-        wheel_valid ? "valid" : "fallback", reference_speed, dt, attenuation);
+    RCLCPP_DEBUG_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
+                          "Slip raw: %.2f filtered: %.2f (wheel %.2f m/s, imu "
+                          "%.2f m/s %s, atten %.2f)",
+                          slip_ratio_raw_, slip_ratio_filtered_,
+                          wheel_speed_forward, reference_speed,
+                          imu_valid ? "valid" : "fallback", attenuation);
     odom_initialized_ = true;
   }
   linear_speed = msg->twist.twist.linear.x;
@@ -396,6 +462,52 @@ void ParticleFilter::wheel_odom_cb(
   wheel_speed_latest_ = msg->twist.twist.linear.x;
   last_wheel_stamp_ = rclcpp::Time(msg->header.stamp);
   has_wheel_speed_ = true;
+}
+
+void ParticleFilter::imu_cb(const sensor_msgs::msg::Imu::ConstSharedPtr &msg) {
+  if (!enable_imu_slip_) {
+    // IMU is not used for slip estimation; just update timestamp and return
+    last_imu_stamp_ = rclcpp::Time(msg->header.stamp);
+    has_imu_ = true;
+    return;
+  }
+
+  rclcpp::Time current_stamp(msg->header.stamp);
+
+  // Get longitudinal acceleration (in body frame)
+  imu_accel_x_ = msg->linear_acceleration.x;
+
+  // Integrate acceleration to estimate velocity
+  if (has_imu_) {
+    double dt = (current_stamp - last_imu_stamp_).seconds();
+    if (dt > 0.0 && dt < 0.5) { // sanity check on dt
+      // Simple integration with decay towards wheel odom
+      // This prevents unbounded drift while still detecting slip
+      double accel_contribution = imu_accel_x_ * dt;
+
+      // Blend with wheel speed using alpha filter
+      // When no slip: imu_speed ≈ wheel_speed
+      // When slip: imu_speed < wheel_speed (wheels spinning faster)
+      double wheel_speed =
+          has_wheel_speed_ ? std::abs(wheel_speed_latest_) : 0.0;
+
+      // Update IMU speed estimate: integrate accel, then blend towards wheel
+      // speed
+      imu_speed_estimate_ += accel_contribution;
+      imu_speed_estimate_ =
+          std::max(0.0, imu_speed_estimate_); // can't go negative
+
+      // Slowly blend towards wheel speed when they're close (no slip)
+      // This prevents IMU drift during normal driving
+      double speed_diff = std::abs(wheel_speed - imu_speed_estimate_);
+      double blend_rate = (speed_diff < 1.0) ? imu_speed_alpha_ : 0.01;
+      imu_speed_estimate_ =
+          (1.0 - blend_rate) * imu_speed_estimate_ + blend_rate * wheel_speed;
+    }
+  }
+
+  last_imu_stamp_ = current_stamp;
+  has_imu_ = true;
 }
 
 void ParticleFilter::applyRoughening() {
@@ -491,12 +603,19 @@ void ParticleFilter::sampling() {
 void ParticleFilter::motionModel() {
   // Apply noise in local frame, then transform to global frame
   const double slip = slip_ratio_filtered_;
+  // If slip-motion modulation is disabled, keep scales at 1.0
   const double scale_x =
-      std::clamp(1.0 + slip_scale_x_ * slip, 1.0, slip_max_x_);
+      enable_slip_motion_
+          ? std::clamp(1.0 + slip_scale_x_ * slip, 1.0, slip_max_x_)
+          : 1.0;
   const double scale_y =
-      std::clamp(1.0 + slip_scale_y_ * slip, 1.0, slip_max_y_);
+      enable_slip_motion_
+          ? std::clamp(1.0 + slip_scale_y_ * slip, 1.0, slip_max_y_)
+          : 1.0;
   const double scale_theta =
-      std::clamp(1.0 + slip_scale_theta_ * slip, 1.0, slip_max_theta_);
+      enable_slip_motion_
+          ? std::clamp(1.0 + slip_scale_theta_ * slip, 1.0, slip_max_theta_)
+          : 1.0;
 
   std::normal_distribution<double> distribution1(0.0, motion_dispersion_x_ *
                                                           scale_x);
@@ -565,7 +684,26 @@ void ParticleFilter::sensorModel() {
       throw std::runtime_error("Invalid range_method value");
     }
 
-    double inv_squash_factor = 1.0 / squash_factor_;
+    double effective_squash = squash_factor_;
+
+    if (enable_corridor_squash_) {
+      // Detect corridor ambiguity and adjust squash factor
+      double corridor_raw = detectCorridorAmbiguity();
+      corridor_confidence_ = corridor_alpha_ * corridor_raw +
+                             (1.0 - corridor_alpha_) * corridor_confidence_;
+
+      // Interpolate squash factor: normal -> corridor based on confidence
+      // Lower squash = trust odometry more (sensor model has less influence)
+      effective_squash = squash_factor_ * (1.0 - corridor_confidence_) +
+                         squash_factor_corridor_ * corridor_confidence_;
+
+      RCLCPP_DEBUG_THROTTLE(
+          this->get_logger(), *this->get_clock(), 2000,
+          "Corridor: raw %.2f filtered %.2f, squash %.2f -> %.2f", corridor_raw,
+          corridor_confidence_, squash_factor_, effective_squash);
+    }
+
+    double inv_squash_factor = 1.0 / effective_squash;
     double weight_sum = 0.0;
     for (int i = 0; i < max_particles_num_; i++) {
       weights_[i] = pow(weights_[i], inv_squash_factor);
@@ -597,6 +735,19 @@ void ParticleFilter::expectedPose() {
 
 void ParticleFilter::publishTfOdom() {
   rclcpp::Time stamp = get_clock()->now();
+
+  // Check GPU warmup period - skip publishing during initial unstable phase
+  if (!gpu_warmed_up_) {
+    double elapsed = (stamp - gpu_init_time_).seconds();
+    if (elapsed < gpu_warmup_time_) {
+      RCLCPP_DEBUG_THROTTLE(get_logger(), *get_clock(), 500,
+                            "GPU warmup: %.1f / %.1f seconds", elapsed,
+                            gpu_warmup_time_);
+      return;
+    }
+    gpu_warmed_up_ = true;
+    RCLCPP_INFO(get_logger(), "GPU warmup complete, publishing enabled");
+  }
 
   // Create map -> laser transform
   tf2::Transform map_laser_transform;
@@ -846,6 +997,13 @@ void ParticleFilter::map_cb(const nav_msgs::msg::OccupancyGrid::SharedPtr msg) {
     throw std::runtime_error("Invalid range_method value");
   }
 
+  // Record GPU initialization time for warmup delay
+  gpu_init_time_ = this->now();
+  if (gpu_warmup_time_ > 0.0) {
+    RCLCPP_INFO(get_logger(), "GPU warmup: suppressing output for %.1f seconds",
+                gpu_warmup_time_);
+  }
+
   precomputeSensorModel();
 
   if (set_initial_pose_) {
@@ -867,6 +1025,186 @@ void ParticleFilter::map_cb(const nav_msgs::msg::OccupancyGrid::SharedPtr msg) {
 
   map_initialized_ = true;
   map_sub_.reset();
+}
+
+double ParticleFilter::detectCorridorAmbiguity() {
+  // Detect corridor/tunnel ambiguity from LiDAR scan pattern
+  // Returns 0-1 where 1 = high corridor confidence (ambiguous longitudinally)
+  //
+  // In a corridor:
+  // - Left/right walls are close and similar distance
+  // - Front/back have longer or no returns
+  // - Low variance perpendicular to travel, high variance along travel
+
+  if (downsampled_laser_ranges_.empty() || num_downsampled_angles_ < 10) {
+    return 0.0;
+  }
+
+  // Split scan into sectors: front, left, right, back
+  int n = num_downsampled_angles_;
+  int quarter = n / 4;
+
+  // Indices (assuming 0 = front, going counter-clockwise)
+  // Front: around index 0 and n-1
+  // Right: around n/4
+  // Back: around n/2
+  // Left: around 3n/4
+
+  auto avgRange = [&](int start, int count) {
+    double sum = 0.0;
+    int valid = 0;
+    for (int i = 0; i < count; i++) {
+      int idx = (start + i) % n;
+      double r = downsampled_laser_ranges_[idx];
+      if (r > 0.1 && r < max_range_ - 0.1) {
+        sum += r;
+        valid++;
+      }
+    }
+    return valid > 0 ? sum / valid : max_range_;
+  };
+
+  auto rangeVariance = [&](int start, int count) {
+    double mean = avgRange(start, count);
+    double var_sum = 0.0;
+    int valid = 0;
+    for (int i = 0; i < count; i++) {
+      int idx = (start + i) % n;
+      double r = downsampled_laser_ranges_[idx];
+      if (r > 0.1 && r < max_range_ - 0.1) {
+        double diff = r - mean;
+        var_sum += diff * diff;
+        valid++;
+      }
+    }
+    return valid > 1 ? var_sum / (valid - 1) : 0.0;
+  };
+
+  int sector_size = quarter / 2;
+  // Right sector (around 90 deg)
+  double right_avg = avgRange(quarter - sector_size / 2, sector_size);
+  double right_var = rangeVariance(quarter - sector_size / 2, sector_size);
+  // Left sector (around 270 deg)
+  double left_avg = avgRange(3 * quarter - sector_size / 2, sector_size);
+  double left_var = rangeVariance(3 * quarter - sector_size / 2, sector_size);
+  // Front sector (around 0/360 deg)
+  double front_avg = avgRange(n - sector_size / 2, sector_size);
+  // Back sector (around 180 deg)
+  double back_avg = avgRange(2 * quarter - sector_size / 2, sector_size);
+
+  // Corridor indicators:
+  // 1. Left and right walls are close (< threshold)
+  // 2. Left and right are similar distance (low difference)
+  // 3. Front/back are much longer than sides
+
+  double side_avg = (left_avg + right_avg) / 2.0;
+  double side_diff = std::abs(left_avg - right_avg);
+  double front_back_avg = (front_avg + back_avg) / 2.0;
+
+  double corridor_score = 0.0;
+
+  // Close walls on both sides?
+  if (side_avg < corridor_wall_threshold_) {
+    corridor_score += 0.4;
+  }
+
+  // Symmetric walls? (similar left/right distance)
+  if (side_diff < 0.5 * side_avg && side_avg < corridor_wall_threshold_) {
+    corridor_score += 0.3;
+  }
+
+  // Long front/back compared to sides? (longitudinal ambiguity)
+  if (front_back_avg > 1.5 * side_avg) {
+    corridor_score += 0.3;
+  }
+
+  // Low variance on sides (straight walls)
+  if (left_var < 0.5 && right_var < 0.5 &&
+      side_avg < corridor_wall_threshold_) {
+    corridor_score += 0.2;
+  }
+
+  return std::clamp(corridor_score, 0.0, 1.0);
+}
+
+rcl_interfaces::msg::SetParametersResult ParticleFilter::onParameterChange(
+    const std::vector<rclcpp::Parameter> &parameters) {
+  rcl_interfaces::msg::SetParametersResult result;
+  result.successful = true;
+
+  for (const auto &param : parameters) {
+    const std::string &name = param.get_name();
+
+    // Feature toggles
+    if (name == "enable_slip_motion") {
+      enable_slip_motion_ = param.as_bool();
+    } else if (name == "enable_slip_odom") {
+      enable_slip_odom_ = param.as_bool();
+    } else if (name == "enable_imu_slip") {
+      enable_imu_slip_ = param.as_bool();
+    } else if (name == "enable_corridor_squash") {
+      enable_corridor_squash_ = param.as_bool();
+    }
+    // Slip parameters
+    else if (name == "slip_alpha") {
+      slip_alpha_ = std::clamp(param.as_double(), 0.0, 1.0);
+    } else if (name == "slip_scale_x") {
+      slip_scale_x_ = param.as_double();
+    } else if (name == "slip_scale_y") {
+      slip_scale_y_ = param.as_double();
+    } else if (name == "slip_scale_theta") {
+      slip_scale_theta_ = param.as_double();
+    } else if (name == "slip_max_x") {
+      slip_max_x_ = param.as_double();
+    } else if (name == "slip_max_y") {
+      slip_max_y_ = param.as_double();
+    } else if (name == "slip_max_theta") {
+      slip_max_theta_ = param.as_double();
+    } else if (name == "slip_odom_gain") {
+      slip_odom_gain_ = param.as_double();
+    } else if (name == "slip_odom_min_factor") {
+      slip_odom_min_factor_ = std::clamp(param.as_double(), 0.0, 1.0);
+    } else if (name == "slip_reference_floor") {
+      slip_reference_floor_ = std::max(param.as_double(), 1e-3);
+    } else if (name == "slip_wheel_timeout") {
+      slip_wheel_timeout_ = std::max(param.as_double(), 1e-3);
+    } else if (name == "imu_speed_alpha") {
+      imu_speed_alpha_ = param.as_double();
+    }
+    // Corridor parameters
+    else if (name == "squash_factor") {
+      squash_factor_ = param.as_double();
+    } else if (name == "squash_factor_corridor") {
+      squash_factor_corridor_ = param.as_double();
+    } else if (name == "corridor_alpha") {
+      corridor_alpha_ = std::clamp(param.as_double(), 0.0, 1.0);
+    } else if (name == "corridor_wall_threshold") {
+      corridor_wall_threshold_ = param.as_double();
+    }
+    // Motion model
+    else if (name == "motion_dispersion_x") {
+      motion_dispersion_x_ = param.as_double();
+    } else if (name == "motion_dispersion_y") {
+      motion_dispersion_y_ = param.as_double();
+    } else if (name == "motion_dispersion_theta") {
+      motion_dispersion_theta_ = param.as_double();
+    }
+    // Sensor model
+    else if (name == "z_short") {
+      z_short_ = param.as_double();
+    } else if (name == "z_max") {
+      z_max_ = param.as_double();
+    } else if (name == "z_rand") {
+      z_rand_ = param.as_double();
+    } else if (name == "z_hit") {
+      z_hit_ = param.as_double();
+    } else if (name == "sigma_hit") {
+      sigma_hit_ = param.as_double();
+    }
+  }
+
+  RCLCPP_INFO(this->get_logger(), "Parameters updated dynamically");
+  return result;
 }
 
 } // namespace particle_filter
