@@ -116,6 +116,8 @@ public:
   std::vector<double> mapToWorld(std::vector<unsigned int> idx);
   double getYaw(const geometry_msgs::msg::Quaternion &q);
   double detectCorridorAmbiguity(); // returns 0-1 corridor confidence
+  bool isValidPosition(double x, double y); // check if position is in free space
+  void killInvalidParticles(); // set weight=0 for particles outside map/in obstacles
 
   // Dynamic parameter callback
   rcl_interfaces::msg::SetParametersResult
@@ -149,6 +151,7 @@ private:
   RangeMethod *range_method_;
   RecursiveMutex particles_mtx_;
   nav_msgs::msg::OccupancyGrid::SharedPtr loaded_map_;
+  std::vector<bool> permissible_region_; // pre-computed free space mask
   std::vector<ParticleState> particles_;
   ParticleState expected_pose_;
 

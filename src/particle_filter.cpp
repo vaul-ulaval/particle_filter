@@ -120,6 +120,8 @@ void ParticleFilter::loadParam() {
   slip_odom_min_factor_ = std::clamp(slip_odom_min_factor_, 0.0, 1.0);
   slip_reference_floor_ = std::max(slip_reference_floor_, 1e-3);
   slip_wheel_timeout_ = std::max(slip_wheel_timeout_, 1e-3);
+  imu_speed_alpha_ =
+      std::clamp(imu_speed_alpha_, 0.0, 1.0); // prevent oscillation
 
   this->declare_parameter("set_initial_pose", false);
   this->declare_parameter("init_pose_x", 0.0);
@@ -552,6 +554,8 @@ void ParticleFilter::update() {
   sampling();
   // Motion model
   motionModel();
+  // Kill particles that went outside map or into obstacles
+  killInvalidParticles();
   // Sensor model
   sensorModel();
   // Apply roughening if sensor information is poor (optional)
@@ -730,6 +734,60 @@ void ParticleFilter::expectedPose() {
     expected_pose_.x += particles_[i].weight * particles_[i].x;
     expected_pose_.y += particles_[i].weight * particles_[i].y;
     expected_pose_.theta += particles_[i].weight * particles_[i].theta;
+  }
+}
+
+bool ParticleFilter::isValidPosition(double x, double y) {
+  // Check if world position (x, y) is within map bounds and in free space
+  if (!loaded_map_ || permissible_region_.empty()) {
+    return true; // No map loaded yet, allow all
+  }
+
+  std::vector<double> pos = {x, y};
+  std::vector<unsigned int> idx = worldToMap(pos);
+  unsigned int map_x = idx[0];
+  unsigned int map_y = idx[1];
+
+  // Check bounds
+  if (map_x >= loaded_map_->info.width || map_y >= loaded_map_->info.height) {
+    return false;
+  }
+
+  // Check permissible region (pre-computed free space)
+  size_t flat_idx = map_y * loaded_map_->info.width + map_x;
+  return permissible_region_[flat_idx];
+}
+
+void ParticleFilter::killInvalidParticles() {
+  // Set weight to 0 for particles outside map or in obstacles
+  // They will be eliminated during next resampling
+  int killed = 0;
+  for (int i = 0; i < max_particles_num_; i++) {
+    if (!isValidPosition(particles_[i].x, particles_[i].y)) {
+      particles_[i].weight = 0.0;
+      killed++;
+    }
+  }
+
+  // Renormalize weights if any particles remain
+  if (killed > 0 && killed < max_particles_num_) {
+    double weight_sum = 0.0;
+    for (int i = 0; i < max_particles_num_; i++) {
+      weight_sum += particles_[i].weight;
+    }
+    if (weight_sum > 1e-10) {
+      for (int i = 0; i < max_particles_num_; i++) {
+        particles_[i].weight /= weight_sum;
+      }
+    }
+  }
+
+  // If too many particles killed, we might lose diversity
+  // Log a warning if more than 10% are invalid
+  if (killed > max_particles_num_ / 10) {
+    RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
+                         "Killed %d/%d particles (outside map or in obstacles)",
+                         killed, max_particles_num_);
   }
 }
 
@@ -965,6 +1023,20 @@ void ParticleFilter::map_cb(const nav_msgs::msg::OccupancyGrid::SharedPtr msg) {
 
   // max range in pixel
   max_range_px_ = (int)(max_range_ / mapResolution);
+
+  // Build permissible region mask (free space = true, occupied/unknown = false)
+  size_t map_size = loaded_map_->info.width * loaded_map_->info.height;
+  permissible_region_.resize(map_size);
+  int free_cells = 0;
+  for (size_t i = 0; i < map_size; i++) {
+    // OccupancyGrid: 0 = free, 100 = occupied, -1 = unknown
+    permissible_region_[i] = (loaded_map_->data[i] == 0);
+    if (permissible_region_[i])
+      free_cells++;
+  }
+  RCLCPP_INFO(get_logger(),
+              "Built permissible region: %d/%zu cells are free (%.1f%%)",
+              free_cells, map_size, 100.0 * free_cells / map_size);
 
   // Transform loaded map into OMap format which is needed by range_libc
   // ref: originale range_libc project - range_libc/pywrapper/RangeLibc.pyx,
