@@ -102,6 +102,7 @@ public:
   void sampling();
   void motionModel();
   void sensorModel();
+  void applyRoughening();
   void expectedPose();
   void publishTfOdom();
   void visualize();
