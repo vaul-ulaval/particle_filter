@@ -1,5 +1,8 @@
 #include "particle_filter.h"
 #include <range_libc/RangeLib.h>
+#include <algorithm>
+#include <cmath>
+#include <set>
 #include <tf2/LinearMath/Matrix3x3.hpp>
 #include <tf2/LinearMath/Quaternion.hpp>
 #include <tf2/time.hpp>
@@ -36,6 +39,15 @@ void ParticleFilter::loadParam() {
   this->declare_parameter("motion_dispersion_x", 0.05);
   this->declare_parameter("motion_dispersion_y", 0.025);
   this->declare_parameter("motion_dispersion_theta", 0.25);
+  this->declare_parameter("motion_model", "basic");
+  this->declare_parameter("alpha_1_tum", 0.2);
+  this->declare_parameter("alpha_2_tum", 0.2);
+  this->declare_parameter("alpha_3_tum", 0.2);
+  this->declare_parameter("alpha_4_tum", 0.2);
+  this->declare_parameter("lam_thresh", 0.1);
+  this->declare_parameter("lidar_index_mode", "step");
+  this->declare_parameter("des_lidar_beams", 21);
+  this->declare_parameter("lidar_aspect_ratio", 3.0);
 
   this->get_parameter("scan_topic", scan_topic_);
   this->get_parameter("odometry_topic", odometry_topic_);
@@ -58,6 +70,15 @@ void ParticleFilter::loadParam() {
   this->get_parameter("motion_dispersion_x", motion_dispersion_x_);
   this->get_parameter("motion_dispersion_y", motion_dispersion_y_);
   this->get_parameter("motion_dispersion_theta", motion_dispersion_theta_);
+  this->get_parameter("motion_model", motion_model_);
+  this->get_parameter("alpha_1_tum", alpha_1_tum_);
+  this->get_parameter("alpha_2_tum", alpha_2_tum_);
+  this->get_parameter("alpha_3_tum", alpha_3_tum_);
+  this->get_parameter("alpha_4_tum", alpha_4_tum_);
+  this->get_parameter("lam_thresh", lam_thresh_);
+  this->get_parameter("lidar_index_mode", lidar_index_mode_);
+  this->get_parameter("des_lidar_beams", des_lidar_beams_);
+  this->get_parameter("lidar_aspect_ratio", lidar_aspect_ratio_);
 
   this->declare_parameter("set_initial_pose", false);
   this->declare_parameter("init_pose_x", 0.0);
@@ -249,8 +270,18 @@ void ParticleFilter::lidar_cb(
     RCLCPP_INFO(this->get_logger(), "...Received first LiDAR message");
     angle_min_ = msg->angle_min;
     angle_increment_ = msg->angle_increment;
-    for (size_t i = 0; i < (msg->ranges).size(); i = i + angle_step_) {
-      downsampled_laser_angles_.push_back(angle_min_ + angle_increment_ * i);
+    if (lidar_index_mode_ == "box") {
+      if (!computeBoxLidarIndices(msg->ranges.size())) {
+        RCLCPP_WARN(this->get_logger(),
+                    "box lidar index mode invalid, falling back to step");
+        computeStepLidarIndices(msg->ranges.size());
+      }
+    } else {
+      computeStepLidarIndices(msg->ranges.size());
+    }
+
+    for (size_t idx : lidar_sample_indices_) {
+      downsampled_laser_angles_.push_back(angle_min_ + angle_increment_ * idx);
     }
     num_downsampled_angles_ = downsampled_laser_angles_.size();
 
@@ -267,8 +298,8 @@ void ParticleFilter::lidar_cb(
   }
 
   downsampled_laser_ranges_.clear();
-  for (size_t i = 0; i < (msg->ranges).size(); i = i + angle_step_) {
-    downsampled_laser_ranges_.push_back(msg->ranges[i]);
+  for (size_t idx : lidar_sample_indices_) {
+    downsampled_laser_ranges_.push_back(msg->ranges[idx]);
   }
 
   // Run the AMCL update on every lidar scan
@@ -360,6 +391,47 @@ void ParticleFilter::sampling() {
 }
 
 void ParticleFilter::motionModel() {
+  if (motion_model_ == "tum") {
+    std::mt19937 generator = rng_.engine();
+
+    double dx = odometry_data_[0];
+    double dy = odometry_data_[1];
+    double dtheta = odometry_data_[2];
+    double d_trans = std::sqrt(dx * dx + dy * dy);
+
+    if (d_trans < 1e-6 && std::abs(dtheta) < 1e-6) {
+      return;
+    }
+
+    double d_rot1 = (d_trans > 1e-6) ? std::atan2(dy, dx) : 0.0;
+    double d_rot2 = normalizeAngle(dtheta - d_rot1);
+
+    double scale_rot1 = alpha_1_tum_ * std::abs(d_rot1) +
+                        alpha_2_tum_ / std::max(d_trans, lam_thresh_);
+    double scale_rot2 = alpha_1_tum_ * std::abs(d_rot2) +
+                        alpha_2_tum_ / std::max(d_trans, lam_thresh_);
+    double scale_trans =
+        alpha_3_tum_ * d_trans +
+        alpha_4_tum_ * (std::abs(d_rot1) + std::abs(d_rot2));
+
+    std::normal_distribution<double> n_rot1(0.0, scale_rot1);
+    std::normal_distribution<double> n_rot2(0.0, scale_rot2);
+    std::normal_distribution<double> n_trans(0.0, scale_trans);
+
+    for (int i = 0; i < max_particles_num_; i++) {
+      double rot1_hat = d_rot1 + n_rot1(generator);
+      double trans_hat = d_trans + n_trans(generator);
+      double rot2_hat = d_rot2 + n_rot2(generator);
+
+      double heading = particles_[i].theta + rot1_hat;
+      particles_[i].x += trans_hat * std::cos(heading);
+      particles_[i].y += trans_hat * std::sin(heading);
+      particles_[i].theta =
+          normalizeAngle(particles_[i].theta + rot1_hat + rot2_hat);
+    }
+    return;
+  }
+
   std::normal_distribution<double> distribution1(0.0, motion_dispersion_x_);
   std::normal_distribution<double> distribution2(0.0, motion_dispersion_y_);
   std::normal_distribution<double> distribution3(0.0, motion_dispersion_theta_);
@@ -375,8 +447,135 @@ void ParticleFilter::motionModel() {
 
     particles_[i].x += local_dx + distribution1(generator);
     particles_[i].y += local_dy + distribution2(generator);
-    particles_[i].theta += local_dtheta + distribution3(generator);
+    particles_[i].theta =
+        normalizeAngle(particles_[i].theta + local_dtheta + distribution3(generator));
   }
+}
+
+void ParticleFilter::computeStepLidarIndices(size_t beam_count) {
+  lidar_sample_indices_.clear();
+  size_t step = std::max(1, angle_step_);
+  for (size_t i = 0; i < beam_count; i += step) {
+    lidar_sample_indices_.push_back(i);
+  }
+}
+
+bool ParticleFilter::computeBoxLidarIndices(size_t beam_count) {
+  lidar_sample_indices_.clear();
+  if (beam_count < 3) {
+    return false;
+  }
+
+  int desired = std::max(3, des_lidar_beams_);
+  if (desired % 2 == 0) {
+    desired += 1;
+  }
+  if (desired > static_cast<int>(beam_count)) {
+    desired = static_cast<int>(beam_count);
+    if (desired % 2 == 0) {
+      desired -= 1;
+    }
+  }
+  if (desired < 3) {
+    return false;
+  }
+
+  const double a = lidar_aspect_ratio_;
+  std::vector<double> beam_angles(beam_count);
+  for (size_t i = 0; i < beam_count; i++) {
+    beam_angles[i] = angle_min_ + angle_increment_ * static_cast<double>(i);
+  }
+
+  std::vector<double> inter_x(beam_count, 0.0);
+  std::vector<double> inter_y(beam_count, 0.0);
+
+  std::vector<std::pair<double, double>> corners = {
+      {a, 1.0}, {a, -1.0}, {-a, -1.0}, {-a, 1.0}};
+
+  for (size_t edge = 0; edge < corners.size(); edge++) {
+    double x1 = corners[edge].first;
+    double y1 = corners[edge].second;
+    double x2 = corners[(edge + 1) % corners.size()].first;
+    double y2 = corners[(edge + 1) % corners.size()].second;
+
+    for (size_t i = 0; i < beam_count; i++) {
+      double x4 = 2.0 * a * std::cos(beam_angles[i]);
+      double y4 = 2.0 * a * std::sin(beam_angles[i]);
+
+      double den = (x1 - x2) * (-y4) - (y1 - y2) * (-x4);
+      if (std::abs(den) < 1e-12) {
+        continue;
+      }
+
+      double t = (x1 * (-y4) - y1 * (-x4)) / den;
+      double u = (x1 * (y1 - y2) - y1 * (x1 - x2)) / den;
+      if (t >= 0.0 && t <= 1.0 && u >= 0.0 && u <= 1.0) {
+        inter_x[i] = u * x4;
+        inter_y[i] = u * y4;
+      }
+    }
+  }
+
+  std::vector<double> dist(beam_count - 1, 0.0);
+  double total_dist = 0.0;
+  for (size_t i = 0; i + 1 < beam_count; i++) {
+    double dx = inter_x[i + 1] - inter_x[i];
+    double dy = inter_y[i + 1] - inter_y[i];
+    dist[i] = std::sqrt(dx * dx + dy * dy);
+    total_dist += dist[i];
+  }
+
+  if (total_dist <= 0.0) {
+    return false;
+  }
+
+  double dist_amt = total_dist / static_cast<double>(desired - 1);
+  int mid = static_cast<int>(beam_count / 2);
+  int desired_half = desired / 2 + 1;
+  std::vector<int> sparse_idxs = {mid};
+
+  int idx = mid + 1;
+  double acc = 0.0;
+  while (static_cast<int>(sparse_idxs.size()) <= desired_half &&
+         idx < static_cast<int>(beam_count - 1)) {
+    acc += dist[idx];
+    if (acc >= dist_amt) {
+      acc = 0.0;
+      sparse_idxs.push_back(idx - 1);
+    }
+    idx += 1;
+    if (idx == static_cast<int>(beam_count - 1)) {
+      sparse_idxs.push_back(static_cast<int>(beam_count - 1));
+      break;
+    }
+  }
+
+  std::vector<int> mirrored_half;
+  for (size_t i = 1; i < sparse_idxs.size(); i++) {
+    mirrored_half.insert(mirrored_half.begin(), 2 * sparse_idxs[0] - sparse_idxs[i]);
+  }
+
+  std::vector<int> all_idxs = mirrored_half;
+  all_idxs.insert(all_idxs.end(), sparse_idxs.begin(), sparse_idxs.end());
+  std::set<int> unique_sorted;
+  for (int v : all_idxs) {
+    if (v >= 0 && v < static_cast<int>(beam_count)) {
+      unique_sorted.insert(v);
+    }
+  }
+
+  if (unique_sorted.size() < 3) {
+    return false;
+  }
+
+  for (int v : unique_sorted) {
+    lidar_sample_indices_.push_back(static_cast<size_t>(v));
+  }
+  return true;
+}
+
+double ParticleFilter::normalizeAngle(double angle) {
+  return std::atan2(std::sin(angle), std::cos(angle));
 }
 
 void ParticleFilter::sensorModel() {

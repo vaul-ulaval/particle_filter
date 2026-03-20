@@ -8,6 +8,9 @@ particle_filter:
     transform_tolerance: 0.5
     # range data downsampling
     angle_step: 18
+    lidar_index_mode: 'step'
+    des_lidar_beams: 21
+    lidar_aspect_ratio: 3.0
     max_particles: 2000
     squash_factor: 2.2
     # visualization
@@ -27,9 +30,15 @@ particle_filter:
     z_hit: 0.75
     sigma_hit: 8.0
     # motion model dispersion constants
+    motion_model: 'basic'
     motion_dispersion_x: 0.05
     motion_dispersion_y: 0.025
     motion_dispersion_theta: 0.25
+    alpha_1_tum: 0.2
+    alpha_2_tum: 0.2
+    alpha_3_tum: 0.2
+    alpha_4_tum: 0.2
+    lam_thresh: 0.1
     # sensor model variant, variant 2 good for rmgpu, 3 doesn't work for rmgpu
     rangelib_variant: 2
 
@@ -37,4 +46,3 @@ map_server:
   ros__parameters:
     # assuming map file is in particle_filter/maps
     map: 'plt-20-sept'
-

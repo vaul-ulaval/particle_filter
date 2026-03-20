@@ -105,6 +105,9 @@ public:
   void expectedPose();
   void publishTfOdom();
   void visualize();
+  void computeStepLidarIndices(size_t beam_count);
+  bool computeBoxLidarIndices(size_t beam_count);
+  double normalizeAngle(double angle);
 
   // Utils
   std::vector<unsigned int> worldToMap(std::vector<double> position);
@@ -148,6 +151,7 @@ private:
 
   double angle_min_;
   double angle_increment_;
+  std::vector<size_t> lidar_sample_indices_;
   std::vector<double> downsampled_laser_angles_;
   std::vector<double> downsampled_laser_ranges_;
 
@@ -185,6 +189,16 @@ private:
   double motion_dispersion_x_;
   double motion_dispersion_y_;
   double motion_dispersion_theta_;
+  std::string motion_model_;
+  double alpha_1_tum_;
+  double alpha_2_tum_;
+  double alpha_3_tum_;
+  double alpha_4_tum_;
+  double lam_thresh_;
+
+  std::string lidar_index_mode_;
+  int des_lidar_beams_;
+  double lidar_aspect_ratio_;
 
   // options
   int viz_;
