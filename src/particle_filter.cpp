@@ -521,12 +521,30 @@ void ParticleFilter::publishTfOdom() {
   tf_broadcaster_->sendTransform(t_map_odom);
 
   if (publish_odom_) {
+    geometry_msgs::msg::TransformStamped laser_to_base_msg;
+    try {
+      laser_to_base_msg =
+          tf_buffer_->lookupTransform("laser", "base_link", tf2::TimePointZero);
+    } catch (const tf2::TransformException &ex) {
+      RCLCPP_WARN(get_logger(), "Could not transform laser to base_link: %s",
+                  ex.what());
+      return;
+    }
+
+    tf2::Transform laser_base_transform;
+    tf2::fromMsg(laser_to_base_msg.transform, laser_base_transform);
+
+    // Compute map -> base_link transform for odometry pose
+    tf2::Transform map_base_transform =
+        map_laser_transform * laser_base_transform;
+
     auto odom = std::make_unique<nav_msgs::msg::Odometry>();
     odom->header.stamp = stamp;
     odom->header.frame_id = "map";
-    odom->pose.pose.position.x = expected_pose_.x;
-    odom->pose.pose.position.y = expected_pose_.y;
-    odom->pose.pose.orientation = tf2::toMsg(map_laser_quat);
+    odom->child_frame_id = "base_link";
+    odom->pose.pose.position.x = map_base_transform.getOrigin().x();
+    odom->pose.pose.position.y = map_base_transform.getOrigin().y();
+    odom->pose.pose.orientation = tf2::toMsg(map_base_transform.getRotation());
     odom->twist.twist.linear.x = linear_speed;
     odom->twist.twist.angular.z = angular_speed;
     odom_pub_->publish(std::move(odom));
